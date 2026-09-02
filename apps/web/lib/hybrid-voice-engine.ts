@@ -117,13 +117,18 @@ export class HybridVoiceEngine {
     this.cancelSpeech();
     this.pauseRecognition();
 
-    // 1. Try server-side Studio Neural TTS first (Gemini Aoede native studio voice or OpenAI)
+    // Try cloud TTS (Gemini Aoede natural voice) with a fast 1.5s timeout.
+    // Falls back instantly to browser voice if cloud is slow or quota-exhausted.
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({ text }),
+        signal: controller.signal
       });
+      clearTimeout(timer);
 
       if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
         const engineType = res.headers.get("X-TTS-Engine");
@@ -148,7 +153,6 @@ export class HybridVoiceEngine {
           this.setStatus("Speaking", this.mode);
           this.callbacks.onAgentSpeech(text);
 
-          // Animate spectrum visualizer while Gemini is speaking
           animInterval = setInterval(() => {
             if (!this.currentAudio || this.currentAudio.paused) {
               if (animInterval) clearInterval(animInterval);
@@ -166,10 +170,7 @@ export class HybridVoiceEngine {
         };
 
         const handleDone = () => {
-          if (animInterval) {
-            clearInterval(animInterval);
-            animInterval = null;
-          }
+          if (animInterval) { clearInterval(animInterval); animInterval = null; }
           this.callbacks.onSpectrumChange([15, 20, 15, 18, 12]);
           this.cancelSpeech();
 
@@ -196,10 +197,7 @@ export class HybridVoiceEngine {
 
         audio.onended = handleDone;
         audio.onerror = () => {
-          if (animInterval) {
-            clearInterval(animInterval);
-            animInterval = null;
-          }
+          if (animInterval) { clearInterval(animInterval); animInterval = null; }
           this.fallbackBrowserSpeech(text, onEnded, resumeListening);
         };
 
@@ -207,10 +205,9 @@ export class HybridVoiceEngine {
         return;
       }
     } catch {
-      // Server neural TTS not available, fall back to browser natural voice
+      // Cloud TTS unavailable or timed out — use browser voice
     }
 
-    // 2. High-fidelity Natural Browser Voice fallback
     this.fallbackBrowserSpeech(text, onEnded, resumeListening);
   }
 
@@ -234,7 +231,7 @@ export class HybridVoiceEngine {
     // Soft, natural human cadence & gentle pitch
     utterance.rate = 0.94;
     utterance.pitch = 1.0;
-    utterance.volume = 0.95;
+    utterance.volume = 1.0;
 
     utterance.onstart = () => {
       if (this.isStopped) {
@@ -285,36 +282,82 @@ export class HybridVoiceEngine {
    * Completely independent audio playback — no status changes, no recognition.
    * Used for auto-greeting and manual message playback.
    */
+  // In-memory cache for TTS audio blobs to avoid re-fetching the same text
+  private static ttsCache = new Map<string, Blob>();
+
   public speakOnly(text: string, onEnded?: () => void): void {
-    // Cancel any ongoing speakOnly playback and abort pending fetches
+    this.isStopped = false;
     this.cancelSpeech();
     const gen = ++this.speakOnlyGen;
 
-    const playFallbackBrowser = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      onEnded?.();
+      return;
+    }
+
+    const playBrowserVoice = () => {
       if (gen !== this.speakOnlyGen) return; // Stale — cancelled
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-        onEnded?.();
-        return;
+
+      const doSpeak = () => {
+        try { window.speechSynthesis.resume(); } catch { /* ignore */ }
+        const utterance = new SpeechSynthesisUtterance(text);
+        const voices = window.speechSynthesis.getVoices();
+        const bestVoice = getBestNaturalVoice(voices);
+        if (bestVoice) utterance.voice = bestVoice;
+        utterance.rate = 0.94;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        utterance.onend = () => onEnded?.();
+        utterance.onerror = () => onEnded?.();
+        try { window.speechSynthesis.resume(); } catch { /* ignore */ }
+        window.speechSynthesis.speak(utterance);
+      };
+
+      if (window.speechSynthesis.getVoices().length > 0) {
+        doSpeak();
+      } else {
+        const prevHandler = window.speechSynthesis.onvoiceschanged;
+        window.speechSynthesis.onvoiceschanged = (e) => {
+          if (prevHandler) (prevHandler as any)(e);
+          doSpeak();
+          window.speechSynthesis.onvoiceschanged = null;
+        };
       }
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      const bestVoice = getBestNaturalVoice(voices);
-      if (bestVoice) utterance.voice = bestVoice;
-      utterance.rate = 0.94;
-      utterance.pitch = 1.0;
-      utterance.volume = 0.95;
-      utterance.onend = () => onEnded?.();
-      utterance.onerror = () => onEnded?.();
-      try { window.speechSynthesis.resume(); } catch { /* ignore */ }
-      window.speechSynthesis.speak(utterance);
     };
 
-    // Create new AbortController for this request
+    const playBlob = (blob: Blob) => {
+      if (gen !== this.speakOnlyGen) return;
+      const url = URL.createObjectURL(blob);
+      this.currentAudioUrl = url;
+      const audio = new Audio(url);
+      this.currentAudio = audio;
+      audio.onended = () => {
+        this.cancelSpeech();
+        onEnded?.();
+      };
+      audio.onerror = () => {
+        this.cancelSpeech();
+        playBrowserVoice();
+      };
+      audio.play().catch(() => playBrowserVoice());
+    };
+
+    // Check cache first — avoids burning API quota on repeated greeting playback
+    const cached = HybridVoiceEngine.ttsCache.get(text);
+    if (cached) {
+      playBlob(cached);
+      return;
+    }
+
+    // Try cloud TTS (Gemini Aoede) with 2s timeout, fall back to browser voice
     this.speakOnlyAbort = new AbortController();
     const signal = this.speakOnlyAbort.signal;
+    const fetchTimer = setTimeout(() => {
+      if (gen === this.speakOnlyGen && this.speakOnlyAbort) {
+        this.speakOnlyAbort.abort();
+      }
+    }, 2000);
 
-    // Try server TTS first, then fall back to browser voice
     fetch("/api/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -322,30 +365,22 @@ export class HybridVoiceEngine {
       signal
     })
       .then((res) => {
-        if (gen !== this.speakOnlyGen) return; // Stale — cancelled
+        clearTimeout(fetchTimer);
+        if (gen !== this.speakOnlyGen) return;
         if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
           return res.blob().then((blob) => {
-            if (gen !== this.speakOnlyGen) return; // Stale — cancelled
-            const url = URL.createObjectURL(blob);
-            this.currentAudioUrl = url;
-            const audio = new Audio(url);
-            this.currentAudio = audio;
-            audio.onended = () => {
-              this.cancelSpeech();
-              onEnded?.();
-            };
-            audio.onerror = () => {
-              this.cancelSpeech();
-              playFallbackBrowser();
-            };
-            return audio.play();
+            if (gen !== this.speakOnlyGen) return;
+            // Cache for future use
+            HybridVoiceEngine.ttsCache.set(text, blob);
+            playBlob(blob);
           });
         }
-        playFallbackBrowser();
+        playBrowserVoice();
       })
       .catch(() => {
-        if (gen !== this.speakOnlyGen) return; // Aborted — don't fallback
-        playFallbackBrowser();
+        clearTimeout(fetchTimer);
+        if (gen !== this.speakOnlyGen) return;
+        playBrowserVoice();
       });
   }
 
@@ -612,19 +647,9 @@ export function getBestNaturalVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
   );
   if (appleVoice) return appleVoice;
 
-  // Tier 5: Filter out harsh mechanical desktop SAPI voices
-  const nonRobotic = pool.find((v) => {
-    const lower = v.name.toLowerCase();
-    return (
-      !lower.includes("desktop") &&
-      !lower.includes("zira") &&
-      !lower.includes("david") &&
-      !lower.includes("mark") &&
-      !lower.includes("hazel") &&
-      !lower.includes("george")
-    );
-  });
-  if (nonRobotic) return nonRobotic;
+  // Tier 5: Microsoft Zira (Windows pre-installed female voice)
+  const ziraVoice = pool.find((v) => v.name.toLowerCase().includes("zira"));
+  if (ziraVoice) return ziraVoice;
 
   return pool[0];
 }

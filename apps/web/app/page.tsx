@@ -2271,6 +2271,7 @@ function ConversationCard({
   const mockVoiceTimerRef = useRef<number | null>(null);
   const hasAutoGreeted = useRef(false);
   const isSubmittingVoiceRef = useRef(false);
+  const isAgentSpeakingRef = useRef(false);
   const isVoiceActive = voiceEngineStatus !== "Idle" && voiceEngineStatus !== "Error";
 
   useEffect(() => {
@@ -2305,18 +2306,20 @@ function ConversationCard({
         setSpectrum(newSpectrum);
       },
       onUserTranscript: (text, isFinal) => {
-        if (isSubmittingVoiceRef.current) return;
+        if (isAgentSpeakingRef.current || isSubmittingVoiceRef.current) return;
 
         // Discard any mic transcript that captured Edith's own greeting or response text
         const lower = text.toLowerCase().trim();
         const selfEchoKeywords = [
-          "welcome to pixel",
-          "i'm edith",
-          "im edith",
+          "welcome",
+          "pixel",
+          "edith",
           "guide to planning",
+          "planning work",
           "tracking tickets",
-          "connecting your team",
-          "brought you to check",
+          "connecting your",
+          "what brought you",
+          "check us out",
           "created pix-",
           "assigned it to",
           "i'll open",
@@ -2335,7 +2338,9 @@ function ConversationCard({
             try {
               const result = await onSendRef.current(text, "voice");
               if (result?.speech && isTTSEnabledRef.current) {
+                isAgentSpeakingRef.current = true;
                 await engine.speakLocalResponse(result.speech, () => {
+                  isAgentSpeakingRef.current = false;
                   engine.stop();
                 }, false);
               } else {
@@ -2350,7 +2355,7 @@ function ConversationCard({
         }
       },
       onAgentSpeech: () => {
-        // Agent is speaking
+        isAgentSpeakingRef.current = true;
       },
       onError: (err) => {
         setVoiceError(err);
@@ -2358,6 +2363,40 @@ function ConversationCard({
     });
 
     voiceEngineRef.current = engine;
+
+    // Speak initial introduction greeting on visit.
+    // Browser autoplay policy blocks speechSynthesis until user interacts,
+    // so we also register one-time gesture listeners as a fallback.
+    if (!hasAutoGreeted.current && !shouldDisableAutoGreetingSpeech()) {
+      hasAutoGreeted.current = true;
+      const greetingText = initialTranscript[0]?.text;
+      if (greetingText) {
+        let greetingSpoken = false;
+
+        const speakGreeting = () => {
+          if (greetingSpoken) return;
+          greetingSpoken = true;
+          isAgentSpeakingRef.current = true;
+          engine.speakOnly(greetingText, () => {
+            isAgentSpeakingRef.current = false;
+          });
+        };
+
+        // Try immediately (works if cloud TTS responds — cloud audio bypasses autoplay)
+        speakGreeting();
+
+        // Also register gesture listeners for browser voice fallback
+        const onGesture = () => {
+          speakGreeting();
+          window.removeEventListener("pointerdown", onGesture);
+          window.removeEventListener("click", onGesture);
+          window.removeEventListener("keydown", onGesture);
+        };
+        window.addEventListener("pointerdown", onGesture, { once: true });
+        window.addEventListener("click", onGesture, { once: true });
+        window.addEventListener("keydown", onGesture, { once: true });
+      }
+    }
 
     if (isVoiceTestMode()) {
       const speechWindow = window as SpeechRecognitionWindow;
@@ -2400,7 +2439,7 @@ function ConversationCard({
     const message = draft;
     setDraft("");
     setLiveTranscript("");
-    voiceEngineRef.current?.stop();
+    voiceEngineRef.current?.cancelSpeech();
     void (async () => {
       const result = await onSend(message, "text");
       if (result?.speech && isTTSEnabledRef.current) {
@@ -2432,6 +2471,8 @@ function ConversationCard({
       voiceEngineRef.current?.stop();
     } else {
       hasAutoGreeted.current = true;
+      isAgentSpeakingRef.current = false;
+      voiceEngineRef.current?.cancelSpeech();
       setVoiceError("");
       void voiceEngineRef.current?.start();
     }
@@ -2506,7 +2547,7 @@ function ConversationCard({
             key={prompt}
             onClick={() => {
               setLiveTranscript("");
-              voiceEngineRef.current?.stop();
+              voiceEngineRef.current?.cancelSpeech();
               void (async () => {
                 const result = await onSend(prompt, "text");
                 if (result?.speech && isTTSEnabledRef.current) {

@@ -44,6 +44,9 @@ function pcmToWav(pcmBuffer: Buffer, sampleRate = 24000, numChannels = 1, bitsPe
   return Buffer.concat([header, pcmBuffer]);
 }
 
+// Track when Gemini last returned 429 to avoid hammering it
+let geminiCooldownUntil = 0;
+
 export async function POST(req: Request) {
   const geminiKey = getGeminiKey();
   const openaiKey = process.env.OPENAI_API_KEY;
@@ -61,7 +64,8 @@ export async function POST(req: Request) {
   }
 
   // 1. Priority: Google Gemini 2.5 Flash Native Neural Audio
-  if (geminiKey) {
+  //    Short 5s cooldown after 429 to avoid rapid-fire hammering
+  if (geminiKey && Date.now() > geminiCooldownUntil) {
     try {
       const payload = {
         contents: [
@@ -99,6 +103,7 @@ export async function POST(req: Request) {
         const data = await res.json();
         const b64Data = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (b64Data) {
+          geminiCooldownUntil = 0; // Reset cooldown on success
           const pcmBuffer = Buffer.from(b64Data, "base64");
           const wavBuffer = pcmToWav(pcmBuffer, 24000, 1, 16);
           return new Response(new Uint8Array(wavBuffer), {
@@ -112,6 +117,10 @@ export async function POST(req: Request) {
       } else {
         const errText = await res.text();
         console.warn("Gemini TTS API returned non-200:", res.status, errText);
+        if (res.status === 429) {
+          // Only 5 second cooldown — keep retrying frequently
+          geminiCooldownUntil = Date.now() + 5_000;
+        }
       }
     } catch (e) {
       console.error("Gemini TTS fetch failed:", e);
