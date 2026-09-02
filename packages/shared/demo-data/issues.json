@@ -1,0 +1,42 @@
+[
+  {
+    "id": "LIN-142",
+    "title": "Fix flaky webhook retry after deploy",
+    "priority": "High",
+    "assignee": "Maya Chen",
+    "project": "Integrations",
+    "status": "In progress"
+  },
+  {
+    "id": "LIN-137",
+    "title": "Add assignee keyboard shortcut",
+    "priority": "Medium",
+    "assignee": "Noah Patel",
+    "project": "Issue Triage",
+    "status": "Todo"
+  },
+  {
+    "id": "LIN-131",
+    "title": "Improve cycle burndown calculation",
+    "priority": "High",
+    "assignee": "Avery Brooks",
+    "project": "Planning",
+    "status": "Review"
+  },
+  {
+    "id": "LIN-125",
+    "title": "Clarify GitHub import status copy",
+    "priority": "Low",
+    "assignee": "Iris Morgan",
+    "project": "Migration",
+    "status": "Todo"
+  },
+  {
+    "id": "LIN-119",
+    "title": "Batch update labels from issue list",
+    "priority": "Medium",
+    "assignee": "Sam Rivera",
+    "project": "Issue Triage",
+    "status": "Backlog"
+  }
+]

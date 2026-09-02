@@ -1,0 +1,20 @@
+{
+  "name": "linear-simplified",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web run dev",
+    "build:web": "npm --workspace apps/web run build",
+    "lint:web": "npm --workspace apps/web run lint",
+    "test:web": "npm --workspace apps/web run test",
+    "test:e2e": "playwright test",
+    "test:api": ".venv\\Scripts\\python -m unittest discover -s apps\\api\\tests",
+    "dev:api": ".venv\\Scripts\\python -m uvicorn app.main:app --app-dir apps\\api --reload --port 8001",
+    "start:api": ".venv\\Scripts\\python -m uvicorn app.main:app --app-dir apps\\api --port 8001"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}

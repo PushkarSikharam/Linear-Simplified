@@ -1,0 +1,453 @@
+from __future__ import annotations
+
+from app.product_config import PRODUCTS_BY_ID
+from app.schemas import IntentTrace, RetrievedContext, SessionSummary, Signal, TurnRequest, TurnResponse
+from app.services.action_planner import ActionPlanner
+from app.services.action_validator import ActionValidator
+from app.services.conversation_manager import ConversationManager
+from app.services.demo_data import extract_unknown_person, find_issue_by_person, find_issues_by_person
+from app.services.intent_extractor import IntentExtractor
+from app.services.language_normalizer import normalize_for_intent
+from app.services.retriever import ProductRetriever, RetrievedDocument
+from app.services.session_manager import SessionManager
+
+
+class DemoAgent:
+    def __init__(self) -> None:
+        self.sessions = SessionManager()
+        self.intent_extractor = IntentExtractor()
+        self.action_planner = ActionPlanner()
+        self.action_validator = ActionValidator()
+        self.conversation_manager = ConversationManager()
+        self.retriever = ProductRetriever()
+
+    def handle_turn(self, request: TurnRequest) -> TurnResponse:
+        if request.product_id not in PRODUCTS_BY_ID:
+            return self._denied_response(
+                request,
+                "I can only run demos for the configured product.",
+                reason="Denied because the requested product is not configured.",
+            )
+
+        self.sessions.ensure_session(request.session_id, request.product_id)
+        if not self.sessions.activate_turn(request.session_id, request.turn_id):
+            return self._stale_response(
+                request,
+                proposed_action=None,
+                reason="Discarded because a newer turn already exists for this session.",
+            )
+        self.sessions.store_message(
+            request.session_id,
+            request.turn_id,
+            "user",
+            request.message,
+        )
+
+        normalized_message = normalize_for_intent(request.message)
+        intent_trace, signals = self.intent_extractor.extract(request.message)
+        clarification = self.conversation_manager.clarification_for(request.message)
+        if clarification:
+            self.sessions.remember_session_context(
+                request.session_id,
+                clarification.signals,
+                clarification_pending=clarification.clarification_pending,
+            )
+            speech = clarification.speech
+            self.sessions.store_message(request.session_id, request.turn_id, "assistant", speech)
+            self.sessions.complete_turn(request.session_id, request.turn_id)
+            return TurnResponse(
+                session_id=request.session_id,
+                turn_id=request.turn_id,
+                status="completed",
+                speech=speech,
+                proposed_action=None,
+                validated_action=None,
+                intent_trace=clarification.intent_trace,
+                signals=clarification.signals,
+                retrieved_context=[],
+                session_summary=self.sessions.session_summary(
+                    request.session_id,
+                    clarification_pending=clarification.clarification_pending,
+                ),
+            )
+
+        follow_up_action, follow_up_signals = self.conversation_manager.follow_up_action(
+            request.message,
+            last_feature=self.sessions.latest_signal_value(request.session_id, "feature_interest"),
+        )
+        signals.extend(follow_up_signals)
+        proposed_action = follow_up_action or self.action_planner.plan(
+            request.message,
+            intent_trace,
+            selected_issue_id=request.selected_issue_id,
+        )
+        validated_action = self.action_validator.validate(request.product_id, proposed_action)
+        self._refine_issue_targeting(request.message, intent_trace, validated_action)
+        signals.extend(self._person_signals(request.message))
+        retrieved_docs = (
+            []
+            if proposed_action and not validated_action
+            else self.retriever.retrieve(request.product_id, normalized_message)
+        )
+
+        if not self.sessions.is_active_turn(request.session_id, request.turn_id):
+            return self._stale_response(
+                request,
+                proposed_action=proposed_action,
+                reason="Discarded because this is no longer the active turn.",
+            )
+
+        if proposed_action and not validated_action:
+            intent_trace.status = "denied"
+            intent_trace.reason = self._denied_reason(proposed_action.type)
+            speech = self._denied_speech(proposed_action.type)
+            status = "denied"
+        else:
+            speech = self._speech(request.message, intent_trace, validated_action, retrieved_docs)
+            status = "completed"
+
+        self.sessions.store_signals(request.session_id, request.turn_id, signals)
+        self.sessions.remember_session_context(request.session_id, signals)
+        self.sessions.store_message(request.session_id, request.turn_id, "assistant", speech)
+        self.sessions.complete_turn(request.session_id, request.turn_id)
+
+        return TurnResponse(
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            status=status,
+            speech=speech,
+            proposed_action=proposed_action,
+            validated_action=validated_action,
+            intent_trace=intent_trace,
+            signals=signals,
+            retrieved_context=self._context_payload(retrieved_docs),
+            session_summary=self.sessions.session_summary(request.session_id),
+        )
+
+    def cancel_turn(self, session_id: str, turn_id: int):
+        return self.sessions.cancel_turn(session_id, turn_id)
+
+    def _denied_reason(self, proposed_action_type: str) -> str:
+        return "Denied because the requested action is outside this product demo."
+
+    def _denied_speech(self, proposed_action_type: str) -> str:
+        return "I can only demonstrate Pixel workflows here, so I cannot open that."
+
+    def _stale_response(self, request: TurnRequest, proposed_action, reason: str) -> TurnResponse:
+        return TurnResponse(
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            status="stale",
+            speech="This turn was replaced by a newer request.",
+            proposed_action=proposed_action,
+            validated_action=None,
+            intent_trace=IntentTrace(
+                status="interrupted",
+                reason=reason,
+            ),
+            signals=[],
+            retrieved_context=[],
+            session_summary=(
+                self.sessions.session_summary(request.session_id)
+                if request.product_id in PRODUCTS_BY_ID
+                else SessionSummary()
+            ),
+        )
+
+    def _speech(
+        self,
+        message: str,
+        intent_trace: IntentTrace,
+        validated_action,
+        retrieved_docs: list[RetrievedDocument],
+    ) -> str:
+        if validated_action and validated_action.type == "OPEN_DEMO_ISSUE":
+            issue = find_issue_by_person(message)
+            if issue:
+                return f"I found {issue.id}, assigned to {issue.assignee}. I'll open that ticket."
+
+        if validated_action and validated_action.type == "CREATE_DEMO_ISSUE":
+            payload = validated_action.payload
+            assignee = payload.get("assignee", "")
+            known_team = {"Maya Chen", "Noah Patel", "Avery Brooks", "Iris Morgan"}
+            if assignee and assignee not in known_team:
+                return (
+                    f"{assignee} is not in the team directory yet. "
+                    f"I'll open Teams so you can add {assignee} first."
+                )
+            return (
+                f"I created {payload['id']} and assigned it to {payload['assignee']}. "
+                "I'll open the new demo ticket."
+            )
+
+        if validated_action and validated_action.type == "UPDATE_DEMO_ISSUE":
+            payload = validated_action.payload
+            changes = []
+            if payload.get("assignee"):
+                changes.append(f"assignee is now {payload['assignee']}")
+            if payload.get("priority"):
+                changes.append(f"priority is now {payload['priority']}")
+            if payload.get("status"):
+                changes.append(f"status is now {payload['status']}")
+            change_text = ", ".join(changes)
+            return f"Done. I updated {payload['issue_id']}: {change_text}."
+
+        if validated_action and validated_action.type == "FILTER_ISSUES_BY_ASSIGNEE":
+            issues = find_issues_by_person(message)
+            assignee = validated_action.payload.get("assignee")
+            if issues and isinstance(assignee, str):
+                issue_list = ", ".join(issue.id for issue in issues)
+                plural = "ticket" if len(issues) == 1 else "tickets"
+                return (
+                    f"I found {len(issues)} {plural} assigned to {assignee}: "
+                    f"{issue_list}. I'll show the filtered issue list."
+                )
+            return "I'll show the filtered issue list."
+
+        if validated_action and validated_action.type == "HIGHLIGHT_CREATE_TICKET_BUTTON":
+            return self._grounded_prefix(retrieved_docs) + (
+                "You create tickets from the Issues view. I'll open it and highlight Create ticket."
+            )
+
+        if validated_action and validated_action.type == "HIGHLIGHT_ADD_MEMBER_BUTTON":
+            name = validated_action.payload.get("name", "that person")
+            return (
+                f"{name} is not in the team directory yet. "
+                f"I'll open Teams so you can add {name} first."
+            )
+
+        if validated_action and validated_action.type == "HIGHLIGHT_ASSIGNMENT_CONTROL":
+            issue = find_issue_by_person(message)
+            assignment_context = self._grounded_sentence(
+                retrieved_docs,
+                ("assignment", "assignee", "assigned"),
+            )
+            if issue:
+                return assignment_context + (
+                    f"I'll open {issue.id} and highlight the assignee control for {issue.assignee}."
+                )
+            return assignment_context + "I'll open a demo issue and highlight the assignee control."
+
+        unknown_person = extract_unknown_person(message)
+        if unknown_person and intent_trace.relevant_feature == "Issues":
+            return self._grounded_prefix(retrieved_docs) + (
+                f"I could not find a ticket for {unknown_person}, so I'll show the Issues list."
+            )
+
+        if self._asks_capabilities(message):
+            return (
+                "I can guide this Pixel demo through planning, issues, projects, "
+                "teams, and integrations. I can open approved views, find demo issues, "
+                "highlight controls, answer workflow questions, and block requests outside this product."
+            )
+
+        if intent_trace.relevant_feature == "Cycles":
+            return self._grounded_prefix(retrieved_docs) + "I'll show you the current cycle."
+        if intent_trace.relevant_feature == "Issues":
+            return self._grounded_prefix(retrieved_docs) + "I'll open Issues."
+        if intent_trace.relevant_feature == "Projects":
+            return self._grounded_prefix(retrieved_docs) + "I'll open Projects."
+        if intent_trace.relevant_feature == "Teams":
+            if self._asks_team_count(message):
+                return "There are 4 team members in this demo workspace. I'll open Teams."
+            return self._grounded_prefix(retrieved_docs) + "I'll open Teams."
+        if intent_trace.relevant_feature == "Integrations":
+            if validated_action and validated_action.type == "OPEN_GITHUB_SETUP":
+                return self._grounded_prefix(retrieved_docs) + (
+                    "I'll open the GitHub setup flow and show the connection steps."
+                )
+            if validated_action and validated_action.type == "HIGHLIGHT_GITHUB_CARD":
+                return (
+                    "GitHub keeps pull requests, commits, and issue references connected to the work. "
+                    "I'll open Integrations and highlight GitHub."
+                )
+            if validated_action and validated_action.type == "HIGHLIGHT_SLACK_CARD":
+                return (
+                    "Slack lets teams create issues from messages and receive workflow updates where conversations happen. "
+                    "I'll open Integrations and highlight Slack."
+                )
+            return self._grounded_prefix(retrieved_docs) + "I'll open Integrations."
+        return "I can help demonstrate planning, issues, projects, teams, and integrations in this product."
+
+    def _person_signals(self, message: str) -> list[Signal]:
+        issue = find_issue_by_person(message)
+        if not issue:
+            return []
+        return [Signal(type="person_interest", value=issue.assignee, confidence=0.84)]
+
+    def _asks_team_count(self, message: str) -> bool:
+        text = normalize_for_intent(message)
+        return (
+            "how many" in text
+            and any(term in text for term in ("team", "member", "members", "people"))
+        )
+
+    def _asks_capabilities(self, message: str) -> bool:
+        text = normalize_for_intent(message)
+        return any(
+            phrase in text
+            for phrase in (
+                "are you capable",
+                "what can you do",
+                "what are you able",
+                "what can this do",
+                "can you do",
+            )
+        )
+
+    def _mentions_new_issue_workflow(self, message: str) -> bool:
+        text = normalize_for_intent(message)
+        return (
+            any(phrase in text for phrase in ("best way", "where", "how do i", "how to", "show me how", "show how"))
+            and any(term in text for term in ("create", "new", "fresh", "make", "add", "raise", "file"))
+            and any(term in text for term in ("ticket", "issue", "bug"))
+        )
+
+    def _refine_issue_targeting(self, message: str, intent_trace: IntentTrace, validated_action) -> None:
+        if validated_action and validated_action.type in {
+            "OPEN_DEMO_ISSUE",
+            "HIGHLIGHT_ASSIGNMENT_CONTROL",
+            "CREATE_DEMO_ISSUE",
+            "UPDATE_DEMO_ISSUE",
+        }:
+            if validated_action.type == "UPDATE_DEMO_ISSUE":
+                payload = validated_action.payload
+                intent_trace.goal = "Update issue"
+                intent_trace.current_intent = "Edit issue metadata"
+                intent_trace.relevant_feature = "Issues"
+                intent_trace.reason = f"Updating {payload.get('issue_id')} through an approved demo action."
+                intent_trace.confidence = 0.86
+                return
+
+            if validated_action.type == "CREATE_DEMO_ISSUE":
+                assignee = validated_action.payload.get("assignee")
+                issue_id = validated_action.payload.get("id")
+                intent_trace.goal = "Create issue"
+                intent_trace.current_intent = "Create demo issue"
+                intent_trace.relevant_feature = "Issues"
+                intent_trace.reason = f"Creating {issue_id} as a safe demo ticket assigned to {assignee}."
+                intent_trace.confidence = 0.88
+                return
+
+            issue = find_issue_by_person(message)
+            if issue:
+                intent_trace.goal = "Issue lookup"
+                intent_trace.current_intent = (
+                    "Highlight assignment control"
+                    if validated_action.type == "HIGHLIGHT_ASSIGNMENT_CONTROL"
+                    else "Open specific issue"
+                )
+                intent_trace.relevant_feature = "Issues"
+                intent_trace.reason = (
+                    f"Highlighting the assignee control on {issue.id} for {issue.assignee}."
+                    if validated_action.type == "HIGHLIGHT_ASSIGNMENT_CONTROL"
+                    else f"Opening {issue.id} because it is assigned to {issue.assignee}."
+                )
+                intent_trace.confidence = 0.86
+            return
+
+        if validated_action and validated_action.type == "HIGHLIGHT_CREATE_TICKET_BUTTON":
+            intent_trace.goal = "Create issue"
+            intent_trace.current_intent = "Find create ticket entry point"
+            intent_trace.relevant_feature = "Issues"
+            intent_trace.reason = "Showing where ticket creation starts in the Issues view."
+            intent_trace.confidence = 0.86
+            return
+
+        if validated_action and validated_action.type == "HIGHLIGHT_ADD_MEMBER_BUTTON":
+            name = validated_action.payload.get("name", "requested assignee")
+            intent_trace.goal = "Validate assignee"
+            intent_trace.current_intent = "Add missing team member"
+            intent_trace.relevant_feature = "Teams"
+            intent_trace.reason = f"{name} must be added to the team directory before assigning work."
+            intent_trace.confidence = 0.88
+            return
+
+        if validated_action and validated_action.type in {
+            "OPEN_GITHUB_SETUP",
+            "HIGHLIGHT_GITHUB_CARD",
+            "HIGHLIGHT_SLACK_CARD",
+        }:
+            intent_trace.goal = "Connected workflow"
+            intent_trace.current_intent = (
+                "Configure integration"
+                if validated_action.type == "OPEN_GITHUB_SETUP"
+                else "Inspect integration"
+            )
+            intent_trace.relevant_feature = "Integrations"
+            intent_trace.reason = "Showing the requested integration workflow inside the controlled demo."
+            intent_trace.confidence = 0.86
+            return
+
+        if validated_action and validated_action.type == "FILTER_ISSUES_BY_ASSIGNEE":
+            assignee = validated_action.payload.get("assignee")
+            if isinstance(assignee, str):
+                intent_trace.goal = "Issue lookup"
+                intent_trace.current_intent = "Filter issues"
+                intent_trace.relevant_feature = "Issues"
+                intent_trace.reason = f"Filtering issues assigned to {assignee}."
+                intent_trace.confidence = 0.86
+            return
+
+        unknown_person = extract_unknown_person(message)
+        if unknown_person and self._mentions_ticket(message):
+            intent_trace.goal = "Issue lookup"
+            intent_trace.current_intent = "Open specific issue"
+            intent_trace.relevant_feature = "Issues"
+            intent_trace.reason = (
+                f"No demo ticket matched {unknown_person}, so the agent is showing the Issues list."
+            )
+            intent_trace.confidence = 0.64
+
+    def _mentions_ticket(self, message: str) -> bool:
+        text = message.lower()
+        return any(term in text for term in ("ticket", "issue", "bug"))
+
+    def _grounded_prefix(self, retrieved_docs: list[RetrievedDocument]) -> str:
+        if not retrieved_docs:
+            return ""
+        return self._format_sentence(retrieved_docs[0].snippet.split(". ", 1)[0])
+
+    def _grounded_sentence(
+        self,
+        retrieved_docs: list[RetrievedDocument],
+        keywords: tuple[str, ...],
+    ) -> str:
+        for document in retrieved_docs:
+            for sentence in document.snippet.split(". "):
+                normalized = sentence.lower()
+                if any(keyword in normalized for keyword in keywords):
+                    return self._format_sentence(sentence)
+        return self._grounded_prefix(retrieved_docs)
+
+    def _format_sentence(self, sentence: str) -> str:
+        formatted = sentence.strip()
+        formatted = formatted.split(", where", 1)[0].strip()
+        if not formatted:
+            return ""
+        if not formatted.endswith("."):
+            formatted = f"{formatted}."
+        return f"{formatted} "
+
+    def _context_payload(self, retrieved_docs: list[RetrievedDocument]) -> list[RetrievedContext]:
+        return [
+            RetrievedContext(
+                title=document.title,
+                source=document.source,
+                snippet=document.snippet,
+            )
+            for document in retrieved_docs
+        ]
+
+    def _denied_response(self, request: TurnRequest, speech: str, reason: str) -> TurnResponse:
+        return TurnResponse(
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            status="denied",
+            speech=speech,
+            proposed_action=None,
+            validated_action=None,
+            intent_trace=IntentTrace(status="denied", reason=reason),
+            signals=[],
+            retrieved_context=[],
+        )
