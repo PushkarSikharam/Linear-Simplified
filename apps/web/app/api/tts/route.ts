@@ -69,7 +69,7 @@ export async function POST(req: Request) {
             role: "user",
             parts: [
               {
-                text: `You are Edith, a warm, professional, highly articulate product guide for Pixel. Speak this text naturally and concisely with pleasant conversational cadence:\n\n${text}`
+                text: `You are Edith, a soft-spoken, warm, gentle, and natural conversational assistant for Pixel. Speak in a soft, calm, friendly female voice with unhurried conversational cadence:\n\n${text}`
               }
             ]
           }

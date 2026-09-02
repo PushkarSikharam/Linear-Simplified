@@ -30,9 +30,30 @@ export class HybridVoiceEngine {
     this.callbacks = callbacks;
   }
 
+  private isStopped = false;
+
+  /** Clean up all running streams/audio without permanently stopping the engine */
+  private cleanup(): void {
+    this.stopWebRTC();
+    this.stopLocalEngine();
+    this.cancelSpeech();
+    this.callbacks.onError("");
+    this.callbacks.onSpectrumChange([15, 20, 15, 18, 12]);
+  }
+
   public async start(): Promise<void> {
-    this.stop();
+    this.isStopped = false;
+    this.isSpeakingSelf = true; // Block any stray mic input during cooldown
+    this.cleanup();
     this.setStatus("Connecting", "connecting");
+
+    // Wait for speakers to fully go silent after cancelling any playing greeting audio.
+    // Without this delay, the mic immediately picks up the tail-end of Edith's
+    // voice from the speakers and submits it as user input.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    this.isSpeakingSelf = false;
+
+    if (this.isStopped) return; // User clicked stop during cooldown
 
     try {
       // Check session API endpoint for OpenAI key
@@ -43,6 +64,8 @@ export class HybridVoiceEngine {
         client_secret?: string;
         reason?: string;
       };
+
+      if (this.isStopped) return; // User clicked stop during fetch
 
       if (sessionData.success && sessionData.client_secret) {
         // Start WebRTC mode with OpenAI
@@ -57,11 +80,10 @@ export class HybridVoiceEngine {
   }
 
   public stop(): void {
-    this.stopWebRTC();
-    this.stopLocalEngine();
+    this.isStopped = true;
+    this.isSpeakingSelf = false;
+    this.cleanup();
     this.setStatus("Idle", this.mode);
-    this.callbacks.onError("");
-    this.callbacks.onSpectrumChange([15, 20, 15, 18, 12]);
   }
 
   public pauseListening(): void {
@@ -72,10 +94,30 @@ export class HybridVoiceEngine {
   private currentAudio: HTMLAudioElement | null = null;
   private currentAudioUrl: string | null = null;
 
-  public async speakLocalResponse(text: string, onEnded?: () => void, resumeListening = false): Promise<void> {
-    this.cancelSpeech();
+  private isSpeakingSelf = false;
 
-    // 1. Try server-side Studio Neural TTS first (Gemini 2.5 Flash native voice or OpenAI)
+  private pauseRecognition(): void {
+    this.isSpeakingSelf = true;
+    if (this.recognition) {
+      try {
+        const rec = this.recognition as any;
+        rec.onresult = null;
+        rec.onend = null;
+        if (typeof rec.abort === "function") rec.abort();
+      } catch {
+        // ignore
+      }
+      this.recognition = null;
+    }
+  }
+
+  public async speakLocalResponse(text: string, onEnded?: () => void, resumeListening = false): Promise<void> {
+    this.isStopped = false;
+    this.isSpeakingSelf = true;
+    this.cancelSpeech();
+    this.pauseRecognition();
+
+    // 1. Try server-side Studio Neural TTS first (Gemini Aoede native studio voice or OpenAI)
     try {
       const res = await fetch("/api/tts", {
         method: "POST",
@@ -99,6 +141,10 @@ export class HybridVoiceEngine {
         let animInterval: ReturnType<typeof setInterval> | null = null;
 
         audio.onplay = () => {
+          if (this.isStopped) {
+            audio.pause();
+            return;
+          }
           this.setStatus("Speaking", this.mode);
           this.callbacks.onAgentSpeech(text);
 
@@ -125,14 +171,26 @@ export class HybridVoiceEngine {
             animInterval = null;
           }
           this.callbacks.onSpectrumChange([15, 20, 15, 18, 12]);
-          if (this.status === "Speaking") {
-            if (resumeListening) {
-              this.setStatus("Listening", this.mode);
-            } else {
-              this.stop();
-            }
-          }
           this.cancelSpeech();
+
+          if (this.isStopped) {
+            this.isSpeakingSelf = false;
+            this.setStatus("Idle", this.mode);
+            return;
+          }
+
+          if (resumeListening) {
+            this.setStatus("Listening", this.mode);
+            setTimeout(() => {
+              this.isSpeakingSelf = false;
+              if (!this.isStopped && this.mode === "local") {
+                void this.startLocalEngine("Resuming after speech");
+              }
+            }, 400);
+          } else {
+            this.isSpeakingSelf = false;
+            this.stop();
+          }
           onEnded?.();
         };
 
@@ -173,36 +231,43 @@ export class HybridVoiceEngine {
       utterance.voice = bestVoice;
     }
 
-    // Natural human cadence and pitch (avoids robotic frequency distortion)
-    utterance.rate = 0.98;
+    // Soft, natural human cadence & gentle pitch
+    utterance.rate = 0.94;
     utterance.pitch = 1.0;
+    utterance.volume = 0.95;
 
     utterance.onstart = () => {
+      if (this.isStopped) {
+        window.speechSynthesis.cancel();
+        return;
+      }
       this.setStatus("Speaking", this.mode);
       this.callbacks.onAgentSpeech(text);
     };
 
-    utterance.onend = () => {
-      if (this.status === "Speaking") {
-        if (resumeListening) {
-          this.setStatus("Listening", this.mode);
-        } else {
-          this.stop();
-        }
+    const finishHandler = () => {
+      if (this.isStopped) {
+        this.isSpeakingSelf = false;
+        this.setStatus("Idle", this.mode);
+        return;
+      }
+      if (resumeListening) {
+        this.setStatus("Listening", this.mode);
+        setTimeout(() => {
+          this.isSpeakingSelf = false;
+          if (!this.isStopped && this.mode === "local") {
+            void this.startLocalEngine("Resuming listening after speech");
+          }
+        }, 400);
+      } else {
+        this.isSpeakingSelf = false;
+        this.stop();
       }
       onEnded?.();
     };
 
-    utterance.onerror = () => {
-      if (this.status === "Speaking") {
-        if (resumeListening) {
-          this.setStatus("Listening", this.mode);
-        } else {
-          this.stop();
-        }
-      }
-      onEnded?.();
-    };
+    utterance.onend = finishHandler;
+    utterance.onerror = finishHandler;
 
     try {
       window.speechSynthesis.resume();
@@ -212,15 +277,87 @@ export class HybridVoiceEngine {
     window.speechSynthesis.speak(utterance);
   }
 
+  private speakOnlyAbort: AbortController | null = null;
+  private speakOnlyGen = 0;
+
   /**
-   * Speak text using TTS without starting mic/listening.
+   * Speak text using TTS without affecting engine status or mic.
+   * Completely independent audio playback — no status changes, no recognition.
    * Used for auto-greeting and manual message playback.
    */
   public speakOnly(text: string, onEnded?: () => void): void {
-    void this.speakLocalResponse(text, onEnded, false);
+    // Cancel any ongoing speakOnly playback and abort pending fetches
+    this.cancelSpeech();
+    const gen = ++this.speakOnlyGen;
+
+    const playFallbackBrowser = () => {
+      if (gen !== this.speakOnlyGen) return; // Stale — cancelled
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+        onEnded?.();
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voices = window.speechSynthesis.getVoices();
+      const bestVoice = getBestNaturalVoice(voices);
+      if (bestVoice) utterance.voice = bestVoice;
+      utterance.rate = 0.94;
+      utterance.pitch = 1.0;
+      utterance.volume = 0.95;
+      utterance.onend = () => onEnded?.();
+      utterance.onerror = () => onEnded?.();
+      try { window.speechSynthesis.resume(); } catch { /* ignore */ }
+      window.speechSynthesis.speak(utterance);
+    };
+
+    // Create new AbortController for this request
+    this.speakOnlyAbort = new AbortController();
+    const signal = this.speakOnlyAbort.signal;
+
+    // Try server TTS first, then fall back to browser voice
+    fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal
+    })
+      .then((res) => {
+        if (gen !== this.speakOnlyGen) return; // Stale — cancelled
+        if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
+          return res.blob().then((blob) => {
+            if (gen !== this.speakOnlyGen) return; // Stale — cancelled
+            const url = URL.createObjectURL(blob);
+            this.currentAudioUrl = url;
+            const audio = new Audio(url);
+            this.currentAudio = audio;
+            audio.onended = () => {
+              this.cancelSpeech();
+              onEnded?.();
+            };
+            audio.onerror = () => {
+              this.cancelSpeech();
+              playFallbackBrowser();
+            };
+            return audio.play();
+          });
+        }
+        playFallbackBrowser();
+      })
+      .catch(() => {
+        if (gen !== this.speakOnlyGen) return; // Aborted — don't fallback
+        playFallbackBrowser();
+      });
   }
 
   public cancelSpeech(): void {
+    // Abort any in-flight speakOnly fetch
+    if (this.speakOnlyAbort) {
+      this.speakOnlyAbort.abort();
+      this.speakOnlyAbort = null;
+    }
+    // Invalidate speakOnly generation so late callbacks are discarded
+    this.speakOnlyGen++;
+
     if (this.currentAudio) {
       this.currentAudio.pause();
       this.currentAudio = null;
@@ -265,6 +402,9 @@ export class HybridVoiceEngine {
       };
 
       recognition.onresult = (event: any) => {
+        if (this.isSpeakingSelf || this.status === "Speaking") {
+          return; // Prevent Edith from listening to her own speaker output
+        }
         let interim = "";
         let final = "";
 
@@ -434,7 +574,17 @@ export function getBestNaturalVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
   const englishVoices = voices.filter((v) => v.lang.startsWith("en"));
   const pool = englishVoices.length > 0 ? englishVoices : voices;
 
-  // Tier 1: Microsoft Edge / Windows Online Natural Neural voices (crystal-clear human quality)
+  // Tier 1: Soft female Microsoft Natural/Neural voices (Jenny, Aria, Ava, Emma, Sonia)
+  const softFemaleNeural = pool.find((v) => {
+    const name = v.name.toLowerCase();
+    return (
+      (name.includes("natural") || name.includes("neural") || name.includes("online")) &&
+      (name.includes("jenny") || name.includes("aria") || name.includes("ava") || name.includes("emma") || name.includes("sonia"))
+    );
+  });
+  if (softFemaleNeural) return softFemaleNeural;
+
+  // Tier 2: Any Microsoft/Edge Natural Neural voice
   const naturalOnline = pool.find(
     (v) =>
       v.name.includes("Natural") ||
@@ -443,7 +593,7 @@ export function getBestNaturalVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
   );
   if (naturalOnline) return naturalOnline;
 
-  // Tier 2: Google Chrome US/UK High-Definition Female/Conversational voices
+  // Tier 3: Google Chrome US English Female voice
   const googleVoice = pool.find(
     (v) =>
       v.name === "Google US English" ||
@@ -452,27 +602,17 @@ export function getBestNaturalVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
   );
   if (googleVoice) return googleVoice;
 
-  // Tier 3: Apple High-Quality Natural Voices (Samantha, Karen, Siri, Victoria)
+  // Tier 4: Apple Soft Natural Voices (Samantha, Victoria, Karen, Siri)
   const appleVoice = pool.find(
     (v) =>
       v.name.includes("Samantha") ||
+      v.name.includes("Victoria") ||
       v.name.includes("Karen") ||
-      v.name.includes("Siri") ||
-      v.name.includes("Victoria")
+      v.name.includes("Siri")
   );
   if (appleVoice) return appleVoice;
 
-  // Tier 4: Modern Conversational Assistants (Jenny, Aria, Michelle, Ava)
-  const modernVoice = pool.find(
-    (v) =>
-      v.name.includes("Jenny") ||
-      v.name.includes("Aria") ||
-      v.name.includes("Ava") ||
-      v.name.includes("Michelle")
-  );
-  if (modernVoice) return modernVoice;
-
-  // Tier 5: Any English voice that is NOT an obsolete robotic SAPI 5 synthesizer
+  // Tier 5: Filter out harsh mechanical desktop SAPI voices
   const nonRobotic = pool.find((v) => {
     const lower = v.name.toLowerCase();
     return (
@@ -486,7 +626,6 @@ export function getBestNaturalVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
   });
   if (nonRobotic) return nonRobotic;
 
-  // Last resort fallback
   return pool[0];
 }
 

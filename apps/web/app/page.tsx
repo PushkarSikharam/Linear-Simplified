@@ -2306,6 +2306,26 @@ function ConversationCard({
       },
       onUserTranscript: (text, isFinal) => {
         if (isSubmittingVoiceRef.current) return;
+
+        // Discard any mic transcript that captured Edith's own greeting or response text
+        const lower = text.toLowerCase().trim();
+        const selfEchoKeywords = [
+          "welcome to pixel",
+          "i'm edith",
+          "im edith",
+          "guide to planning",
+          "tracking tickets",
+          "connecting your team",
+          "brought you to check",
+          "created pix-",
+          "assigned it to",
+          "i'll open",
+          "i found"
+        ];
+        if (selfEchoKeywords.some((kw) => lower.includes(kw))) {
+          return;
+        }
+
         setLiveTranscript(text);
         if (isFinal && text.trim()) {
           isSubmittingVoiceRef.current = true;
@@ -2338,53 +2358,6 @@ function ConversationCard({
     });
 
     voiceEngineRef.current = engine;
-
-    // Auto-speak the greeting on first visit
-    if (!hasAutoGreeted.current && !shouldDisableAutoGreetingSpeech()) {
-      let greeted = false;
-      const speakGreeting = () => {
-        if (greeted) return;
-        const greetingText = initialTranscript[0]?.text;
-        if (greetingText) {
-          greeted = true;
-          hasAutoGreeted.current = true;
-          engine.speakOnly(greetingText);
-        }
-      };
-
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        try {
-          window.speechSynthesis.resume();
-        } catch {
-          // ignore
-        }
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length > 0) {
-          speakGreeting();
-        } else {
-          window.speechSynthesis.onvoiceschanged = () => {
-            speakGreeting();
-            window.speechSynthesis.onvoiceschanged = null;
-          };
-        }
-
-        // Browser autoplay fallback on first user gesture
-        const unblockOnGesture = () => {
-          if (!greeted) {
-            try {
-              window.speechSynthesis.resume();
-            } catch {
-              // ignore
-            }
-            speakGreeting();
-          }
-          window.removeEventListener("pointerdown", unblockOnGesture);
-          window.removeEventListener("keydown", unblockOnGesture);
-        };
-        window.addEventListener("pointerdown", unblockOnGesture, { once: true });
-        window.addEventListener("keydown", unblockOnGesture, { once: true });
-      }
-    }
 
     if (isVoiceTestMode()) {
       const speechWindow = window as SpeechRecognitionWindow;
@@ -2455,8 +2428,10 @@ function ConversationCard({
     }
 
     if (isVoiceActive) {
+      hasAutoGreeted.current = true;
       voiceEngineRef.current?.stop();
     } else {
+      hasAutoGreeted.current = true;
       setVoiceError("");
       void voiceEngineRef.current?.start();
     }
