@@ -1,0 +1,10 @@
+
+> dev:api
+> .venv\Scripts\python -m uvicorn app.main:app --app-dir apps\api --reload --port 8001
+
+INFO:     Will watch for changes in these directories: ['E:\\Linear Simplified']
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     Started reloader process [25080] using WatchFiles
+INFO:     Started server process [43396]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
