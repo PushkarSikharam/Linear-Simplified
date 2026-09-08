@@ -5,6 +5,7 @@
     "priority": "High",
     "assignee": "Maya Chen",
     "project": "Integrations",
+    "projectId": "PRJ-101",
     "status": "In progress"
   },
   {
@@ -13,6 +14,7 @@
     "priority": "Medium",
     "assignee": "Noah Patel",
     "project": "Issue Triage",
+    "projectId": "PRJ-102",
     "status": "Todo"
   },
   {
@@ -21,6 +23,7 @@
     "priority": "High",
     "assignee": "Avery Brooks",
     "project": "Planning",
+    "projectId": "PRJ-103",
     "status": "Review"
   },
   {
@@ -29,6 +32,7 @@
     "priority": "Low",
     "assignee": "Iris Morgan",
     "project": "Migration",
+    "projectId": "PRJ-104",
     "status": "Todo"
   },
   {
@@ -37,6 +41,7 @@
     "priority": "Medium",
     "assignee": "Sam Rivera",
     "project": "Issue Triage",
+    "projectId": "PRJ-102",
     "status": "Backlog"
   }
 ]

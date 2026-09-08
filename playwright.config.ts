@@ -18,10 +18,11 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `npm.cmd --workspace apps/web run dev -- --port ${webPort}`,
+      command: `npx.cmd next dev --port ${webPort}`,
+      cwd: "apps/web",
       env: {
         ...process.env,
-        NEXT_PUBLIC_API_BASE_URL: `http://127.0.0.1:${apiPort}`
+        NEXT_PUBLIC_API_BASE_URL: "/api/agent"
       },
       timeout: 120_000,
       url: webBaseUrl,

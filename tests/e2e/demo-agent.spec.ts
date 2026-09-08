@@ -1,10 +1,16 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
+
+const apiPort = 8101;
+const agentApiRoute = "**/api/agent/**";
+const agentTurnRoute = "**/api/agent/turn";
+const agentCancelTurnOneRoute = "**/api/agent/turn/1/cancel";
 
 declare global {
   interface Window {
     __demoVoiceSilenceTimeoutMs?: number;
     __disableAutoGreetingSpeech?: boolean;
+    __disableTextResponseSpeech?: boolean;
     __emitVoiceTranscript?: (transcript: string) => void;
   }
 }
@@ -22,20 +28,23 @@ test.beforeAll(async () => {
     }
   );
 
+  apiProcess.unref();
   await waitForApi();
 });
 
 test.afterAll(() => {
-  if (apiProcess?.pid) {
-    spawnSync("taskkill", ["/PID", String(apiProcess.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true
-    });
+  if (apiProcess?.exitCode === null) {
+    apiProcess.kill();
   }
   apiProcess = null;
 });
 
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test.beforeEach(async ({ page }, testInfo) => {
+  await fetch(`http://127.0.0.1:${apiPort}/api/demo-data/reset`, { method: "POST" });
   if (testInfo.title !== "shows a graceful chat error when the agent API cannot be reached") {
     await proxyApiToFreshBackend(page);
   }
@@ -44,6 +53,9 @@ test.beforeEach(async ({ page }, testInfo) => {
 async function openApp(page: Page) {
   await page.addInitScript(() => {
     window.__disableAutoGreetingSpeech = true;
+    if (typeof window.__demoVoiceSilenceTimeoutMs !== "number") {
+      window.__disableTextResponseSpeech = true;
+    }
   });
   await page.goto("/");
   await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
@@ -54,13 +66,19 @@ async function openApp(page: Page) {
 }
 
 async function proxyApiToFreshBackend(page: Page) {
-  await page.route("http://127.0.0.1:8001/api/**", async (route) => {
+  await page.route(agentApiRoute, async (route) => {
     const request = route.request();
     const response = await route.fetch({
-      url: request.url().replace("http://127.0.0.1:8001", "http://127.0.0.1:8101")
+      url: freshBackendUrl(request.url())
     });
     await route.fulfill({ response });
   });
+}
+
+function freshBackendUrl(requestUrl: string): string {
+  const url = new URL(requestUrl);
+  const backendPath = url.pathname.replace("/api/agent", "/api");
+  return `http://127.0.0.1:${apiPort}${backendPath}${url.search}`;
 }
 
 async function waitForApi() {
@@ -70,7 +88,7 @@ async function waitForApi() {
     }
 
     try {
-      const response = await fetch("http://127.0.0.1:8101/health");
+      const response = await fetch(`http://127.0.0.1:${apiPort}/health`);
       if (response.ok) return;
     } catch {
       await delay(500);
@@ -214,6 +232,104 @@ test("keeps the core demo controls visible and navigates every product area", as
   }
 });
 
+test("shows only the current workspace scope across product views", async ({ page }) => {
+  await openApp(page);
+
+  await expect(page.getByTestId("workspace-scope-badge")).toHaveText("2 scoped projects");
+  await expect(page.getByText("LIN-142 - Maya Chen - Integrations")).toBeVisible();
+  await expect(page.getByText("LIN-131 - Avery Brooks - Planning")).toBeHidden();
+
+  await page.getByTestId("nav-issues").click();
+  await expect(page.getByTestId("issue-count-badge")).toHaveText("3 open");
+  await expect(page.getByText("LIN-137 - Noah Patel - Issue Triage")).toBeVisible();
+  await expect(page.getByText("LIN-131 - Avery Brooks - Planning")).toBeHidden();
+
+  await page.getByTestId("nav-projects").click();
+  await expect(page.getByText("GitHub Integration Hardening")).toBeVisible();
+  await expect(page.getByText("Issue Triage Workflow")).toBeVisible();
+  await expect(page.getByText("Cycle Planning Insights")).toBeHidden();
+
+  await page.getByTestId("nav-teams").click();
+  await expect(page.getByTestId("team-member-count")).toHaveText("2 members");
+  await expect(page.getByText("Maya Chen")).toBeVisible();
+  await expect(page.getByText("Avery Brooks")).toBeHidden();
+});
+
+test("switches workspace scope and updates product data boundaries", async ({ page }) => {
+  await openApp(page);
+
+  await page.getByTestId("workspace-switcher").selectOption("workspace-platform");
+
+  await expect(page.getByRole("heading", { name: "Platform Workspace" })).toBeVisible();
+  await expect(page.getByTestId("workspace-scope-badge")).toHaveText("2 scoped projects");
+  await expect(page.getByText("LIN-131 - Avery Brooks - Planning")).toBeVisible();
+  await expect(page.getByText("LIN-142 - Maya Chen - Integrations")).toBeHidden();
+  await expect(page.getByText("Platform Cycle 21")).toBeVisible();
+
+  await page.getByTestId("nav-projects").click();
+  await expect(page.getByText("Cycle Planning Insights")).toBeVisible();
+  await expect(page.getByText("Workspace Migration")).toBeVisible();
+  await expect(page.getByText("GitHub Integration Hardening")).toBeHidden();
+
+  await page.getByTestId("nav-teams").click();
+  await expect(page.getByTestId("team-member-count")).toHaveText("2 members");
+  await expect(page.getByText("Avery Brooks")).toBeVisible();
+  await expect(page.getByText("Maya Chen")).toBeHidden();
+});
+
+test("keeps Edith inside the selected workspace scope", async ({ page }) => {
+  await openApp(page);
+
+  await page.getByTestId("workspace-switcher").selectOption("workspace-platform");
+  await sendChat(page, "how many team members are there");
+  await expect(page.getByTestId("current-view-title")).toHaveText("Teams");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "There are 2 team members in Platform Workspace"
+  );
+
+  await sendChat(page, "open Maya's ticket");
+  await expect(page.getByTestId("current-view-title")).toHaveText("Teams");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "Maya Chen is outside Platform Workspace"
+  );
+
+  await sendChat(page, "open Avery's ticket");
+  await expect(page.getByTestId("current-view-title")).toHaveText("Issue Detail");
+  await expect(page.getByTestId("selected-issue-id")).toHaveText("LIN-131");
+});
+
+test("sends the selected workspace scope to the agent API", async ({ page }) => {
+  let capturedWorkspaceScopeId = "";
+
+  await page.unroute(agentApiRoute);
+  await page.route(agentTurnRoute, async (route) => {
+    const body = route.request().postDataJSON();
+    capturedWorkspaceScopeId = body.workspace_scope_id;
+    const response = await route.fetch({
+      url: freshBackendUrl(route.request().url())
+    });
+    await route.fulfill({ response });
+  });
+
+  await openApp(page);
+  await page.getByTestId("workspace-switcher").selectOption("workspace-platform");
+  await sendChat(page, "show sprint planning");
+
+  expect(capturedWorkspaceScopeId).toBe("workspace-platform");
+});
+
+test("blocks local requests for people outside the current workspace", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "create a ticket for Avery");
+
+  await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "Avery Brooks is outside Product Engineering Workspace"
+  );
+  await expect(page.getByTestId("transcript")).not.toContainText("I created");
+});
+
 test("collapses and expands the assistant sidebar", async ({ page }) => {
   await openApp(page);
 
@@ -328,6 +444,32 @@ test("asks clarification for incomplete all-items requests", async ({ page }) =>
   );
 });
 
+test("asks targeted clarifying questions for vague create and assignment requests", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "create something new");
+  await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "What should I create: a ticket, a project, a cycle, or a team member?"
+  );
+
+  await sendChat(page, "assign it");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "Who should I assign the current ticket to?"
+  );
+});
+
+test("blocks broad workspace requests instead of showing other project data", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "show me all company projects");
+
+  await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "I can only show work inside Product Engineering Workspace"
+  );
+});
+
 test("uses previous issue context for person follow-ups", async ({ page }) => {
   await openApp(page);
 
@@ -344,7 +486,7 @@ test("uses previous issue context for person follow-ups", async ({ page }) => {
 test("shows an evaluator path and runs its first prompt", async ({ page }) => {
   await openApp(page);
 
-  await expect(page.getByTestId("demo-path")).toContainText("Evaluator path");
+  await expect(page.getByTestId("demo-path")).toContainText("Guided demo path");
   await expect(page.getByTestId("demo-path-1")).toContainText("Show sprint planning");
 
   await page.getByTestId("demo-path-1").click();
@@ -361,7 +503,7 @@ test("answers capability and team-count questions conversationally", async ({ pa
 
   await sendChat(page, "how many team members are there");
   await expect(page.getByTestId("current-view-title")).toHaveText("Teams");
-  await expect(page.getByTestId("transcript")).toContainText("There are 4 team members");
+  await expect(page.getByTestId("transcript")).toContainText("There are 2 team members");
 });
 
 test("understands misspellings, corrections, and current issue follow-ups", async ({ page }) => {
@@ -416,8 +558,24 @@ test("creates a demo ticket and opens the new issue", async ({ page }) => {
   await expect(page.getByTestId("assignee-control")).toContainText("Maya Chen");
   await expect(page.getByText("Created now")).toBeVisible();
   await expect(page.getByTestId("transcript")).toContainText("I created PIX-143");
+  await expect(page.getByTestId("activity-popup")).toContainText(
+    "Saved to Product Engineering Workspace: created PIX-143 for Maya Chen."
+  );
 
   await page.getByTestId("nav-issues").click();
+  await expect(page.getByText("PIX-143 - Maya Chen - Issue Triage")).toBeVisible();
+});
+
+test("keeps created demo records after a browser refresh", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "open a fresh ticket for Maya");
+  await expect(page.getByTestId("selected-issue-id")).toHaveText("PIX-143");
+
+  await page.reload();
+  await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
+  await page.getByTestId("nav-issues").click();
+
   await expect(page.getByText("PIX-143 - Maya Chen - Issue Triage")).toBeVisible();
 });
 
@@ -429,6 +587,17 @@ test("shows and highlights the create ticket entry point", async ({ page }) => {
   await expect(page.getByTestId("current-view-title")).toHaveText("Issues");
   await expect(page.getByTestId("create-ticket-button")).toHaveClass(/highlighted-action/);
   await expect(page.getByTestId("transcript")).toContainText("highlight Create ticket");
+});
+
+test("asks who should own a ticket before opening an incomplete create flow", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "create a ticket");
+
+  await expect(page.getByTestId("current-view-title")).toHaveText("Issues");
+  await expect(page.getByTestId("create-ticket-button")).toHaveClass(/highlighted-action/);
+  await expect(page.getByTestId("issue-create-panel")).toBeHidden();
+  await expect(page.getByTestId("transcript")).toContainText("Who should own this ticket?");
 });
 
 test("validates an unknown assignee before continuing ticket creation", async ({ page }) => {
@@ -465,22 +634,22 @@ test("uses voice transcripts as voice-mode turns through the same action pipelin
   page
 }) => {
   await installMockVoice(page);
-  await page.unroute("http://127.0.0.1:8001/api/**");
+  await page.unroute(agentApiRoute);
   let sawVoiceMode = false;
 
-  await page.route("http://127.0.0.1:8001/api/turn", async (route) => {
+  await page.route(agentTurnRoute, async (route) => {
     const body = route.request().postDataJSON();
     if (body?.message === "show sprint planning") {
       sawVoiceMode = body.input_mode === "voice";
     }
     const response = await route.fetch({
-      url: route.request().url().replace("http://127.0.0.1:8001", "http://127.0.0.1:8101")
+      url: freshBackendUrl(route.request().url())
     });
     await route.fulfill({ response });
   });
 
   await openApp(page);
-  await expect(page.getByTestId("voice-status")).toHaveText("Voice: Idle");
+  await expect(page.getByTestId("voice-status")).toHaveText("Voice: Ready");
 
   await page.getByTestId("voice-toggle").click();
   await expect(page.getByTestId("voice-status")).toHaveText("Voice: Listening");
@@ -494,14 +663,14 @@ test("uses voice transcripts as voice-mode turns through the same action pipelin
 
 test("waits for voice silence before sending the completed spoken turn", async ({ page }) => {
   await installMockVoice(page);
-  await page.unroute("http://127.0.0.1:8001/api/**");
+  await page.unroute(agentApiRoute);
   const voiceMessages: string[] = [];
 
-  await page.route("http://127.0.0.1:8001/api/turn", async (route) => {
+  await page.route(agentTurnRoute, async (route) => {
     const body = route.request().postDataJSON();
     voiceMessages.push(body.message);
     const response = await route.fetch({
-      url: route.request().url().replace("http://127.0.0.1:8001", "http://127.0.0.1:8101")
+      url: freshBackendUrl(route.request().url())
     });
     await route.fulfill({ response });
   });
@@ -552,14 +721,14 @@ test("turns agent speech into listening when the user presses voice", async ({ p
 
 test("stops agent speech and listens when the visitor presses voice during speech", async ({ page }) => {
   await installMockVoice(page);
-  await page.unroute("http://127.0.0.1:8001/api/**");
+  await page.unroute(agentApiRoute);
   const voiceMessages: string[] = [];
 
-  await page.route("http://127.0.0.1:8001/api/turn", async (route) => {
+  await page.route(agentTurnRoute, async (route) => {
     const body = route.request().postDataJSON();
     voiceMessages.push(body.message);
     const response = await route.fetch({
-      url: route.request().url().replace("http://127.0.0.1:8001", "http://127.0.0.1:8101")
+      url: freshBackendUrl(route.request().url())
     });
     await route.fulfill({ response });
   });
@@ -608,14 +777,14 @@ test("opens integrations for GitHub and Slack, then blocks out-of-product reques
 });
 
 test("cancels an active turn and ignores the delayed stale result", async ({ page }) => {
-  await page.unroute("http://127.0.0.1:8001/api/**");
+  await page.unroute(agentApiRoute);
   let turnRequestCount = 0;
   let releaseFirstTurn: () => void = () => undefined;
   const firstTurnCanContinue = new Promise<void>((resolve) => {
     releaseFirstTurn = resolve;
   });
 
-  await page.route("http://127.0.0.1:8001/api/turn/1/cancel", async (route) => {
+  await page.route(agentCancelTurnOneRoute, async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
@@ -626,7 +795,7 @@ test("cancels an active turn and ignores the delayed stale result", async ({ pag
     });
   });
 
-  await page.route("http://127.0.0.1:8001/api/turn", async (route) => {
+  await page.route(agentTurnRoute, async (route) => {
     turnRequestCount += 1;
     if (turnRequestCount === 1) {
       await firstTurnCanContinue;
@@ -653,7 +822,7 @@ test("cancels an active turn and ignores the delayed stale result", async ({ pag
       return;
     }
     const response = await route.fetch({
-      url: route.request().url().replace("http://127.0.0.1:8001", "http://127.0.0.1:8101")
+      url: freshBackendUrl(route.request().url())
     });
     await route.fulfill({ response });
   });
@@ -665,7 +834,9 @@ test("cancels an active turn and ignores the delayed stale result", async ({ pag
   await expect(page.getByTestId("turn-status")).toHaveText("Thinking");
 
   try {
-    const cancelRequest = page.waitForRequest("http://127.0.0.1:8001/api/turn/1/cancel");
+    const cancelRequest = page.waitForRequest((request) =>
+      new URL(request.url()).pathname === "/api/agent/turn/1/cancel"
+    );
     await page.getByTestId("chat-input").fill("open ticket for maya");
     await page.getByTestId("chat-send").click();
     await cancelRequest;
@@ -682,7 +853,7 @@ test("cancels an active turn and ignores the delayed stale result", async ({ pag
 });
 
 test("shows a graceful chat error when the agent API cannot be reached", async ({ page }) => {
-  await page.route("http://127.0.0.1:8001/api/turn", (route) => route.abort());
+  await page.route(agentTurnRoute, (route) => route.abort());
   await openApp(page);
 
   await sendChat(page, "show sprint planning");

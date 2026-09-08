@@ -3,10 +3,14 @@ from __future__ import annotations
 import re
 
 from app.schemas import IntentTrace, ProposedAction
-from app.services.demo_data import extract_requested_assignee, find_issue_by_person, load_demo_issues
+from app.services.demo_data import (
+    extract_requested_assignee,
+    find_issue_by_person,
+    load_demo_issues,
+    load_team_member_names,
+    team_member_exists,
+)
 from app.services.language_normalizer import normalize_for_intent
-
-KNOWN_TEAM_MEMBERS = {"Maya Chen", "Noah Patel", "Avery Brooks", "Iris Morgan"}
 
 
 class ActionPlanner:
@@ -15,6 +19,7 @@ class ActionPlanner:
         message: str,
         intent_trace: IntentTrace,
         selected_issue_id: str | None = None,
+        allowed_issue_projects: set[str] | None = None,
     ) -> ProposedAction | None:
         text = normalize_for_intent(message)
 
@@ -24,22 +29,25 @@ class ActionPlanner:
             return ProposedAction(type="OPEN_GMAIL")
         if "delete" in text or "remove all" in text:
             return ProposedAction(type="DELETE_ISSUES")
+        if self._asks_about_new_issue_workflow(text):
+            return ProposedAction(type="HIGHLIGHT_CREATE_TICKET_BUTTON")
+        if self._mentions_new_issue_request(text):
+            assignee = extract_requested_assignee(message)
+            if not team_member_exists(assignee):
+                return ProposedAction(
+                    type="HIGHLIGHT_ADD_MEMBER_BUTTON",
+                    payload={"name": assignee},
+                )
+            return ProposedAction(
+                type="CREATE_DEMO_ISSUE",
+                payload=self._demo_issue_payload(message, allowed_issue_projects),
+            )
         if self._mentions_github_setup(text):
             return ProposedAction(type="OPEN_GITHUB_SETUP")
         if "github" in text:
             return ProposedAction(type="HIGHLIGHT_GITHUB_CARD")
         if "slack" in text:
             return ProposedAction(type="HIGHLIGHT_SLACK_CARD")
-        if self._asks_about_new_issue_workflow(text):
-            return ProposedAction(type="HIGHLIGHT_CREATE_TICKET_BUTTON")
-        if self._mentions_new_issue_request(text):
-            assignee = extract_requested_assignee(message)
-            if assignee not in KNOWN_TEAM_MEMBERS:
-                return ProposedAction(
-                    type="HIGHLIGHT_ADD_MEMBER_BUTTON",
-                    payload={"name": assignee},
-                )
-            return ProposedAction(type="CREATE_DEMO_ISSUE", payload=self._demo_issue_payload(message))
 
         issue_update = self._issue_update_payload(message, text, selected_issue_id)
         if issue_update:
@@ -185,7 +193,7 @@ class ActionPlanner:
             return None
 
         normalized_candidate = candidate.lower()
-        for member in KNOWN_TEAM_MEMBERS:
+        for member in load_team_member_names():
             member_parts = {part.lower() for part in member.split()}
             member_parts.add(member.lower())
             if normalized_candidate in member_parts:
@@ -223,7 +231,11 @@ class ActionPlanner:
             )
         )
 
-    def _demo_issue_payload(self, message: str) -> dict[str, str]:
+    def _demo_issue_payload(
+        self,
+        message: str,
+        allowed_issue_projects: set[str] | None = None,
+    ) -> dict[str, str]:
         text = normalize_for_intent(message)
         assignee = extract_requested_assignee(message)
         return {
@@ -231,11 +243,15 @@ class ActionPlanner:
             "title": self._demo_issue_title(message),
             "priority": self._demo_issue_priority(text),
             "assignee": assignee,
-            "project": self._demo_issue_project(text),
+            "project": self._demo_issue_project(text, allowed_issue_projects),
             "status": "Todo",
         }
 
     _created_count = 0
+
+    @classmethod
+    def reset_created_count(cls) -> None:
+        cls._created_count = 0
 
     def _next_demo_issue_id(self) -> str:
         ActionPlanner._created_count += 1
@@ -278,9 +294,15 @@ class ActionPlanner:
             return "Low"
         return "Medium"
 
-    def _demo_issue_project(self, text: str) -> str:
-        if "github" in text or "integration" in text or "webhook" in text:
+    def _demo_issue_project(self, text: str, allowed_issue_projects: set[str] | None = None) -> str:
+        allowed_projects = allowed_issue_projects or {"Integrations", "Issue Triage", "Planning"}
+        if (
+            ("github" in text or "integration" in text or "webhook" in text)
+            and "Integrations" in allowed_projects
+        ):
             return "Integrations"
-        if "sprint" in text or "cycle" in text:
+        if ("sprint" in text or "cycle" in text) and "Planning" in allowed_projects:
             return "Planning"
-        return "Issue Triage"
+        if "Issue Triage" in allowed_projects:
+            return "Issue Triage"
+        return sorted(allowed_projects)[0]

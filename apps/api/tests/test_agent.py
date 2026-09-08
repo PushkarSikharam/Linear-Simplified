@@ -86,6 +86,206 @@ class AgentApiTest(unittest.TestCase):
         self.assertEqual(body["retrieved_context"][0]["source"], "issues.md")
         self.assertEqual(body["speech"], "I found LIN-142, assigned to Maya Chen. I'll open that ticket.")
 
+    def test_platform_scope_blocks_product_engineering_issue(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_scope",
+                "turn_id": 1,
+                "product_id": "linear_simplified",
+                "workspace_scope_id": "workspace-platform",
+                "message": "Open the ticket created for Maya.",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "denied")
+        self.assertEqual(body["proposed_action"]["type"], "OPEN_DEMO_ISSUE")
+        self.assertIsNone(body["validated_action"])
+        self.assertIn("Maya Chen is outside Platform Workspace", body["speech"])
+        self.assertEqual(body["retrieved_context"], [])
+
+    def test_platform_scope_allows_platform_issue(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_scope",
+                "turn_id": 2,
+                "product_id": "linear_simplified",
+                "workspace_scope_id": "workspace-platform",
+                "message": "Open Avery's ticket.",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["validated_action"]["type"], "OPEN_DEMO_ISSUE")
+        self.assertEqual(body["validated_action"]["payload"]["issue_id"], "LIN-131")
+        self.assertEqual(body["speech"], "I found LIN-131, assigned to Avery Brooks. I'll open that ticket.")
+
+    def test_product_scope_blocks_platform_selected_issue_update(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_scope",
+                "turn_id": 3,
+                "product_id": "linear_simplified",
+                "workspace_scope_id": "workspace-product-eng",
+                "message": "Assign it to Noah.",
+                "input_mode": "text",
+                "current_page": "issue_detail",
+                "selected_issue_id": "LIN-131",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "denied")
+        self.assertEqual(body["proposed_action"]["type"], "UPDATE_DEMO_ISSUE")
+        self.assertIsNone(body["validated_action"])
+        self.assertIn("outside Product Engineering Workspace", body["speech"])
+
+    def test_platform_scope_creates_issue_inside_platform_project(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_scope",
+                "turn_id": 4,
+                "product_id": "linear_simplified",
+                "workspace_scope_id": "workspace-platform",
+                "message": "Create a ticket for Avery about migration readiness.",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["validated_action"]["type"], "CREATE_DEMO_ISSUE")
+        self.assertEqual(body["validated_action"]["payload"]["assignee"], "Avery Brooks")
+        self.assertIn(body["validated_action"]["payload"]["project"], {"Migration", "Planning"})
+
+    def test_demo_data_persists_created_records_and_resets(self) -> None:
+        created_issue = {
+            "id": "PIX-900",
+            "title": "Persist created ticket",
+            "priority": "High",
+            "assignee": "Maya Chen",
+            "project": "Issue Triage",
+            "projectId": "PRJ-102",
+            "status": "Todo",
+            "cycle": "Product Engineering Cycle 14",
+            "estimate": "2 pts",
+            "label": "Demo",
+            "description": "Created by persistence test.",
+        }
+
+        create_response = self.client.post("/api/demo-data/issues", json=created_issue)
+        load_response = self.client.get("/api/demo-data")
+
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(load_response.status_code, 200)
+        loaded_issues = load_response.json()["issues"]
+        self.assertTrue(any(issue["id"] == "PIX-900" for issue in loaded_issues))
+
+        reset_response = self.client.post("/api/demo-data/reset")
+
+        self.assertEqual(reset_response.status_code, 200)
+        reset_issues = reset_response.json()["issues"]
+        self.assertFalse(any(issue["id"] == "PIX-900" for issue in reset_issues))
+
+    def test_demo_data_persists_project_scope_additions(self) -> None:
+        created_project = {
+            "id": "PRJ-900",
+            "name": "Billing Workflow",
+            "description": "Demo project created during review.",
+            "progress": 10,
+            "status": "Planned",
+            "lead": "Maya Chen",
+            "team": "Product Engineering",
+            "targetDate": "2026-12-01",
+        }
+
+        response = self.client.post(
+            "/api/demo-data/projects?workspace_scope_id=workspace-product-eng",
+            json=created_project,
+        )
+        data_response = self.client.get("/api/demo-data")
+
+        self.assertEqual(response.status_code, 200)
+        product_scope = next(
+            scope
+            for scope in data_response.json()["workspaceScopes"]
+            if scope["id"] == "workspace-product-eng"
+        )
+        self.assertIn("PRJ-900", product_scope["allowedProjectIds"])
+        self.assertIn("Billing Workflow", product_scope["allowedIssueProjects"])
+
+    def test_agent_finds_persisted_issue_by_assignee(self) -> None:
+        self.client.post(
+            "/api/demo-data/issues",
+            json={
+                "id": "PIX-901",
+                "title": "Persisted Maya follow-up",
+                "priority": "Medium",
+                "assignee": "Maya Chen",
+                "project": "Issue Triage",
+                "projectId": "PRJ-102",
+                "status": "Todo",
+            },
+        )
+
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_persisted_issue",
+                "turn_id": 1,
+                "product_id": "linear_simplified",
+                "message": "All tickets for Maya",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["validated_action"]["type"], "FILTER_ISSUES_BY_ASSIGNEE")
+        self.assertIn("PIX-901", body["speech"])
+
+    def test_validator_accepts_persisted_scoped_team_member(self) -> None:
+        self.client.post(
+            "/api/demo-data/team-members?workspace_scope_id=workspace-product-eng",
+            json={
+                "name": "Lucifer",
+                "initials": "L",
+                "role": "Product Engineer",
+                "load": 50,
+                "email": "lucifer@pixel.demo",
+                "projectIds": ["PRJ-101"],
+            },
+        )
+
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_persisted_member",
+                "turn_id": 1,
+                "product_id": "linear_simplified",
+                "message": "Create a ticket for Lucifer about GitHub onboarding",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["validated_action"]["type"], "CREATE_DEMO_ISSUE")
+        self.assertEqual(body["validated_action"]["payload"]["assignee"], "Lucifer")
+
     def test_misspelled_ticket_lookup_opens_specific_issue(self) -> None:
         response = self.client.post(
             "/api/turn",
@@ -174,6 +374,82 @@ class AgentApiTest(unittest.TestCase):
         self.assertIn("Do you mean all issues", body["speech"])
         self.assertEqual(body["intent_trace"]["current_intent"], "Clarification needed")
         self.assertEqual(body["session_summary"]["clarification_pending"], "all_items")
+
+    def test_vague_create_request_asks_targeted_clarification(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_test",
+                "turn_id": 24,
+                "product_id": "linear_simplified",
+                "message": "Create something new.",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertIsNone(body["proposed_action"])
+        self.assertIsNone(body["validated_action"])
+        self.assertIn("What should I create", body["speech"])
+
+    def test_incomplete_ticket_create_asks_for_owner(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_test",
+                "turn_id": 28,
+                "product_id": "linear_simplified",
+                "message": "Create a ticket.",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertIsNone(body["proposed_action"])
+        self.assertIsNone(body["validated_action"])
+        self.assertIn("Who should own this ticket", body["speech"])
+
+    def test_broad_workspace_request_is_clarified_without_action(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_test",
+                "turn_id": 25,
+                "product_id": "linear_simplified",
+                "message": "Show me all company projects.",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertIsNone(body["proposed_action"])
+        self.assertIsNone(body["validated_action"])
+        self.assertIn("I can only show work inside Product Engineering Workspace", body["speech"])
+
+    def test_voice_interruption_question_uses_reasoning_policy(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_test",
+                "turn_id": 27,
+                "product_id": "linear_simplified",
+                "message": "How do you stop speaking when I interrupt you?",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertIsNone(body["validated_action"])
+        self.assertEqual(body["intent_trace"]["relevant_feature"], "Voice")
+        self.assertIn("stop the current response", body["speech"])
 
     def test_correction_prefers_positive_feature_over_negated_feature(self) -> None:
         response = self.client.post(
@@ -462,7 +738,7 @@ class AgentApiTest(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["status"], "completed")
         self.assertEqual(body["validated_action"]["type"], "OPEN_TEAMS")
-        self.assertIn("There are 4 team members", body["speech"])
+        self.assertIn("There are 2 team members", body["speech"])
 
     def test_capability_question_answers_without_navigation(self) -> None:
         response = self.client.post(

@@ -1,12 +1,32 @@
 # Pixel
 
-AI voice-first adaptive product demo agent prototype.
+**Developed by [PushkarSikharam](https://github.com/PushkarSikharam)**
+
+Pixel is a scoped project workspace guided by Edith, a conversational demo agent. The product shows how a visitor can ask naturally, by text or voice, and watch the workspace respond through controlled actions.
+
+![Pixel Product Architecture](docs/assets/system-atlas.png)
+
+[Full product architecture](docs/SYSTEM_ARCHITECTURE.md)
+
+Open **System architecture** in the workspace navigation, or visit `/architecture`, for the visual product walkthrough, control model and current boundaries.
+
+```mermaid
+flowchart LR
+    Visitor[Visitor asks by text or voice] --> Edith[Edith interprets the goal]
+    Edith --> Scope[Pixel checks product and project scope]
+    Scope --> Action[Approved workspace action]
+    Action --> UI[Workspace updates]
+    UI --> Memory[Session context]
+    Memory --> Edith
+```
+
+The current product is a controlled adaptive demo. It supports scoped project workspaces, guided creation flows, contextual follow-ups, interruption handling, Microsoft Azure Speech synthesis when configured, and product guardrails. It is not a production multi-tenant SaaS system yet; real identity, permission checks and live integrations still need to be added before real customer data is used.
 
 Current phase:
 
 ```text
 Demo-ready MVP: product UI, controlled actions, chat wiring, retrieval context,
-session intelligence, interruption handling, and browser voice input shell.
+session intelligence, interruption handling, browser voice input shell, and Azure TTS.
 ```
 
 Run the frontend:
@@ -31,11 +51,17 @@ py -m venv .venv
 .venv\Scripts\python -m uvicorn app.main:app --app-dir apps\api --reload --port 8001
 ```
 
-The frontend expects the API at:
+The browser defaults to the app's local API bridge. The workspace and assistant are designed to run as one local demo experience.
 
-```bash
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8001
+Azure voice setup:
+
+```text
+AZURE_SPEECH_KEY=your_rotated_azure_speech_key
+AZURE_SPEECH_REGION=eastus
+AZURE_SPEECH_VOICE_NAME=en-US-JennyNeural
 ```
+
+Put those values in `.env.local`. The Speech key must stay server-side and must not be committed. If a key was pasted into chat or shared anywhere, rotate it in Azure before using it.
 
 Root scripts:
 
@@ -61,5 +87,6 @@ Demo path:
 6. open salesforce
 ```
 
-The same path is available as suggested turns in the chat panel. Use Reset to start
-a clean reviewer session.
+The same path is available as suggested turns in the chat panel. Use Reset to start a clean reviewer session.
+
+The original architecture plan and implementation blueprint are historical planning documents. [SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) describes the current product behavior and remaining boundaries.

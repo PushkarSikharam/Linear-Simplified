@@ -39,6 +39,7 @@ export async function sendAgentTurn(input: {
   message: string;
   inputMode: "text" | "voice";
   currentPage: string;
+  workspaceScopeId: string;
   selectedIssueId?: string;
 }): Promise<AgentTurnResponse> {
   const endpoint = apiEndpoint("turn");
@@ -54,6 +55,7 @@ export async function sendAgentTurn(input: {
       message: input.message,
       input_mode: input.inputMode,
       current_page: input.currentPage,
+      workspace_scope_id: input.workspaceScopeId,
       selected_issue_id: input.selectedIssueId
     })
   });

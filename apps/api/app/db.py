@@ -17,6 +17,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(DB_PATH, timeout=10)
     connection.row_factory = sqlite3.Row
     connection.execute("pragma busy_timeout = 10000")
+    connection.execute("pragma foreign_keys = on")
     try:
         yield connection
         connection.commit()
@@ -75,6 +76,64 @@ def migrate() -> None:
               action_type text not null,
               status text not null,
               created_at text not null
+            );
+
+            create table if not exists demo_workspace_scopes(
+              id text primary key,
+              name text not null,
+              description text not null,
+              allowed_project_ids text not null,
+              allowed_issue_projects text not null
+            );
+
+            create table if not exists demo_projects(
+              id text primary key,
+              name text not null,
+              description text not null,
+              progress integer not null,
+              status text not null,
+              lead text not null,
+              team text not null,
+              target_date text not null
+            );
+
+            create table if not exists demo_team_members(
+              name text primary key,
+              initials text not null,
+              role text not null,
+              load integer not null,
+              email text,
+              project_ids text not null
+            );
+
+            create table if not exists demo_cycles(
+              id text primary key,
+              name text not null,
+              project_id text,
+              days_left integer not null,
+              progress integer not null,
+              completed integer not null,
+              in_progress integer not null,
+              remaining integer not null,
+              focus text not null,
+              status text not null,
+              team text not null,
+              start_date text not null,
+              end_date text not null
+            );
+
+            create table if not exists demo_issues(
+              id text primary key,
+              title text not null,
+              priority text not null,
+              assignee text not null,
+              project text not null,
+              project_id text,
+              status text not null,
+              cycle text,
+              estimate text,
+              label text,
+              description text
             );
             """
         )

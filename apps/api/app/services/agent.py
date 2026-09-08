@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+import re
+
 from app.product_config import PRODUCTS_BY_ID
 from app.schemas import IntentTrace, RetrievedContext, SessionSummary, Signal, TurnRequest, TurnResponse
 from app.services.action_planner import ActionPlanner
 from app.services.action_validator import ActionValidator
 from app.services.conversation_manager import ConversationManager
-from app.services.demo_data import extract_unknown_person, find_issue_by_person, find_issues_by_person
+from app.services.demo_data import (
+    extract_unknown_person,
+    find_issue_by_id,
+    find_issue_by_person,
+    find_issue_by_person_in_scope,
+    find_issues_by_person,
+    find_issues_by_person_in_scope,
+)
 from app.services.intent_extractor import IntentExtractor
 from app.services.language_normalizer import normalize_for_intent
+from app.services.reasoning_policy import ReasoningPolicy
 from app.services.retriever import ProductRetriever, RetrievedDocument
 from app.services.session_manager import SessionManager
+from app.workspace_config import WORKSPACE_SCOPES_BY_ID, WorkspaceScope
 
 
 class DemoAgent:
     def __init__(self) -> None:
         self.sessions = SessionManager()
         self.intent_extractor = IntentExtractor()
+        self.reasoning_policy = ReasoningPolicy()
         self.action_planner = ActionPlanner()
         self.action_validator = ActionValidator()
         self.conversation_manager = ConversationManager()
@@ -27,6 +39,14 @@ class DemoAgent:
                 request,
                 "I can only run demos for the configured product.",
                 reason="Denied because the requested product is not configured.",
+            )
+
+        workspace_scope = WORKSPACE_SCOPES_BY_ID.get(request.workspace_scope_id)
+        if workspace_scope is None:
+            return self._denied_response(
+                request,
+                "I cannot run that workspace because it is not configured for this demo.",
+                reason="Denied because the requested workspace scope is not configured.",
             )
 
         self.sessions.ensure_session(request.session_id, request.product_id)
@@ -44,7 +64,20 @@ class DemoAgent:
         )
 
         normalized_message = normalize_for_intent(request.message)
+        direct_clarification = self._direct_clarification(
+            request,
+            workspace_scope,
+            normalized_message,
+        )
+        if direct_clarification:
+            return direct_clarification
+
         intent_trace, signals = self.intent_extractor.extract(request.message)
+        intent_trace, signals = self.reasoning_policy.refine(
+            request.message,
+            intent_trace,
+            signals,
+        )
         clarification = self.conversation_manager.clarification_for(request.message)
         if clarification:
             self.sessions.remember_session_context(
@@ -80,10 +113,16 @@ class DemoAgent:
             request.message,
             intent_trace,
             selected_issue_id=request.selected_issue_id,
+            allowed_issue_projects=set(workspace_scope.allowed_issue_projects),
         )
-        validated_action = self.action_validator.validate(request.product_id, proposed_action)
-        self._refine_issue_targeting(request.message, intent_trace, validated_action)
-        signals.extend(self._person_signals(request.message))
+        validated_action = self.action_validator.validate(
+            request.product_id,
+            proposed_action,
+            request.workspace_scope_id,
+        )
+        self._refine_issue_targeting(request.message, intent_trace, validated_action, workspace_scope)
+        if validated_action:
+            signals.extend(self._person_signals(request.message, workspace_scope))
         retrieved_docs = (
             []
             if proposed_action and not validated_action
@@ -99,11 +138,11 @@ class DemoAgent:
 
         if proposed_action and not validated_action:
             intent_trace.status = "denied"
-            intent_trace.reason = self._denied_reason(proposed_action.type)
-            speech = self._denied_speech(proposed_action.type)
+            intent_trace.reason = self._denied_reason(proposed_action.type, workspace_scope)
+            speech = self._denied_speech(proposed_action.type, request.message, workspace_scope)
             status = "denied"
         else:
-            speech = self._speech(request.message, intent_trace, validated_action, retrieved_docs)
+            speech = self._speech(request.message, intent_trace, validated_action, retrieved_docs, workspace_scope)
             status = "completed"
 
         self.sessions.store_signals(request.session_id, request.turn_id, signals)
@@ -127,10 +166,89 @@ class DemoAgent:
     def cancel_turn(self, session_id: str, turn_id: int):
         return self.sessions.cancel_turn(session_id, turn_id)
 
-    def _denied_reason(self, proposed_action_type: str) -> str:
+    def _direct_clarification(
+        self,
+        request: TurnRequest,
+        workspace_scope: WorkspaceScope,
+        normalized_message: str,
+    ) -> TurnResponse | None:
+        speech: str | None = None
+        reason = "The visitor's request needs a more specific target before Edith acts."
+
+        if self._asks_vague_create_request(normalized_message):
+            speech = "What should I create: a ticket, a project, a cycle, or a team member?"
+            reason = "The visitor asked to create something but did not specify the object type."
+        elif self._asks_incomplete_ticket_create(normalized_message):
+            speech = "Who should own this ticket? Name a teammate in this workspace and I'll prepare the form."
+            reason = "The visitor asked to create a ticket but did not specify an assignee."
+        elif self._asks_vague_assignment_request(normalized_message):
+            target = f" {request.selected_issue_id}" if request.selected_issue_id else " the current ticket"
+            speech = f"Who should I assign{target} to? You can name someone in this workspace."
+            reason = "The visitor asked to assign work but did not name an assignee."
+        elif self._asks_broad_workspace_request(normalized_message):
+            speech = (
+                f"I can only show work inside {workspace_scope.name}. "
+                "Switch the workspace scope first, then ask me again."
+            )
+            reason = "The visitor asked for broad company or other-workspace data."
+
+        if speech is None:
+            return None
+
+        intent_trace = IntentTrace(
+            goal="Clarify request",
+            current_intent="Clarification needed",
+            relevant_feature="Dashboard",
+            reason=reason,
+            confidence=0.68,
+            status="active",
+        )
+        self.sessions.store_message(request.session_id, request.turn_id, "assistant", speech)
+        self.sessions.complete_turn(request.session_id, request.turn_id)
+        return TurnResponse(
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            status="completed",
+            speech=speech,
+            proposed_action=None,
+            validated_action=None,
+            intent_trace=intent_trace,
+            signals=[],
+            retrieved_context=[],
+            session_summary=self.sessions.session_summary(request.session_id),
+        )
+
+    def _denied_reason(self, proposed_action_type: str, workspace_scope: WorkspaceScope) -> str:
+        if proposed_action_type in {
+            "OPEN_DEMO_ISSUE",
+            "UPDATE_DEMO_ISSUE",
+            "FILTER_ISSUES_BY_ASSIGNEE",
+            "HIGHLIGHT_ASSIGNMENT_CONTROL",
+            "CREATE_DEMO_ISSUE",
+        }:
+            return f"Denied because the requested object is outside {workspace_scope.name}."
         return "Denied because the requested action is outside this product demo."
 
-    def _denied_speech(self, proposed_action_type: str) -> str:
+    def _denied_speech(
+        self,
+        proposed_action_type: str,
+        message: str,
+        workspace_scope: WorkspaceScope,
+    ) -> str:
+        if proposed_action_type in {
+            "OPEN_DEMO_ISSUE",
+            "UPDATE_DEMO_ISSUE",
+            "FILTER_ISSUES_BY_ASSIGNEE",
+            "HIGHLIGHT_ASSIGNMENT_CONTROL",
+            "CREATE_DEMO_ISSUE",
+        }:
+            issue = find_issue_by_person(message)
+            if issue:
+                return (
+                    f"{issue.assignee} is outside {workspace_scope.name}, "
+                    "so I cannot show or change that work here."
+                )
+            return f"That work is outside {workspace_scope.name}, so I cannot show or change it here."
         return "I can only demonstrate Pixel workflows here, so I cannot open that."
 
     def _stale_response(self, request: TurnRequest, proposed_action, reason: str) -> TurnResponse:
@@ -160,16 +278,18 @@ class DemoAgent:
         intent_trace: IntentTrace,
         validated_action,
         retrieved_docs: list[RetrievedDocument],
+        workspace_scope: WorkspaceScope,
     ) -> str:
         if validated_action and validated_action.type == "OPEN_DEMO_ISSUE":
-            issue = find_issue_by_person(message)
+            issue_id = validated_action.payload.get("issue_id")
+            issue = find_issue_by_id(issue_id) if isinstance(issue_id, str) else None
             if issue:
                 return f"I found {issue.id}, assigned to {issue.assignee}. I'll open that ticket."
 
         if validated_action and validated_action.type == "CREATE_DEMO_ISSUE":
             payload = validated_action.payload
             assignee = payload.get("assignee", "")
-            known_team = {"Maya Chen", "Noah Patel", "Avery Brooks", "Iris Morgan"}
+            known_team = self._known_team_members(workspace_scope)
             if assignee and assignee not in known_team:
                 return (
                     f"{assignee} is not in the team directory yet. "
@@ -193,7 +313,11 @@ class DemoAgent:
             return f"Done. I updated {payload['issue_id']}: {change_text}."
 
         if validated_action and validated_action.type == "FILTER_ISSUES_BY_ASSIGNEE":
-            issues = find_issues_by_person(message)
+            issues = find_issues_by_person_in_scope(
+                message,
+                set(workspace_scope.allowed_project_ids),
+                set(workspace_scope.allowed_issue_projects),
+            )
             assignee = validated_action.payload.get("assignee")
             if issues and isinstance(assignee, str):
                 issue_list = ", ".join(issue.id for issue in issues)
@@ -217,7 +341,12 @@ class DemoAgent:
             )
 
         if validated_action and validated_action.type == "HIGHLIGHT_ASSIGNMENT_CONTROL":
-            issue = find_issue_by_person(message)
+            issue_id = validated_action.payload.get("issue_id")
+            issue = find_issue_by_id(issue_id) if isinstance(issue_id, str) else find_issue_by_person_in_scope(
+                message,
+                set(workspace_scope.allowed_project_ids),
+                set(workspace_scope.allowed_issue_projects),
+            )
             assignment_context = self._grounded_sentence(
                 retrieved_docs,
                 ("assignment", "assignee", "assigned"),
@@ -249,7 +378,8 @@ class DemoAgent:
             return self._grounded_prefix(retrieved_docs) + "I'll open Projects."
         if intent_trace.relevant_feature == "Teams":
             if self._asks_team_count(message):
-                return "There are 4 team members in this demo workspace. I'll open Teams."
+                count = self._team_count(workspace_scope)
+                return f"There are {count} team members in {workspace_scope.name}. I'll open Teams."
             return self._grounded_prefix(retrieved_docs) + "I'll open Teams."
         if intent_trace.relevant_feature == "Integrations":
             if validated_action and validated_action.type == "OPEN_GITHUB_SETUP":
@@ -267,13 +397,28 @@ class DemoAgent:
                     "I'll open Integrations and highlight Slack."
                 )
             return self._grounded_prefix(retrieved_docs) + "I'll open Integrations."
+        if intent_trace.relevant_feature == "Voice":
+            return (
+                "When you start speaking, I stop the current response, listen for the completed thought, "
+                "then run the new request through the same scoped action checks."
+            )
         return "I can help demonstrate planning, issues, projects, teams, and integrations in this product."
 
-    def _person_signals(self, message: str) -> list[Signal]:
-        issue = find_issue_by_person(message)
+    def _person_signals(self, message: str, workspace_scope: WorkspaceScope) -> list[Signal]:
+        issue = find_issue_by_person_in_scope(
+            message,
+            set(workspace_scope.allowed_project_ids),
+            set(workspace_scope.allowed_issue_projects),
+        )
         if not issue:
             return []
         return [Signal(type="person_interest", value=issue.assignee, confidence=0.84)]
+
+    def _team_count(self, workspace_scope: WorkspaceScope) -> int:
+        return len(self._known_team_members(workspace_scope))
+
+    def _known_team_members(self, workspace_scope: WorkspaceScope) -> set[str]:
+        return set(workspace_scope.allowed_team_members)
 
     def _asks_team_count(self, message: str) -> bool:
         text = normalize_for_intent(message)
@@ -295,6 +440,43 @@ class DemoAgent:
             )
         )
 
+    def _asks_vague_create_request(self, text: str) -> bool:
+        return bool(
+            re.search(r"\b(create|make|add|new)\b", text)
+            and not re.search(
+                r"\b(it|this|that|priority|status|urgent|critical|high|medium|low|done|review|todo|backlog)\b",
+                text,
+            )
+            and not re.search(
+                r"\b(ticket|tickets|issue|issues|bug|bugs|project|projects|cycle|cycles|sprint|member|members|teammate|teammates|person|people)\b",
+                text,
+            )
+        )
+
+    def _asks_incomplete_ticket_create(self, text: str) -> bool:
+        return bool(
+            re.search(r"\b(create|make|add|raise|file)\b", text)
+            and re.search(r"\b(ticket|tickets|issue|issues|bug|bugs)\b", text)
+            and not re.search(r"\b(where|how|best way|show me how|show how)\b", text)
+            and not re.search(r"\b(for|assigned to|assign to|owner is|assignee is)\b", text)
+        )
+
+    def _asks_vague_assignment_request(self, text: str) -> bool:
+        return bool(
+            re.search(r"\b(assign|reassign|owner|assignee)\b", text)
+            and not re.search(r"\b(to|for|maya|noah|avery|iris|lucifer)\b", text)
+            and not re.search(r"\b(how do i assign|how to assign|show assignment|issue assignment)\b", text)
+        )
+
+    def _asks_broad_workspace_request(self, text: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(company|organization|org|other workspace|other project|another workspace|another team|all workspaces|every workspace|all teams|every team)\b",
+                text,
+            )
+            and re.search(r"\b(project|projects|ticket|tickets|issue|issues|work|team|teams)\b", text)
+        )
+
     def _mentions_new_issue_workflow(self, message: str) -> bool:
         text = normalize_for_intent(message)
         return (
@@ -303,7 +485,13 @@ class DemoAgent:
             and any(term in text for term in ("ticket", "issue", "bug"))
         )
 
-    def _refine_issue_targeting(self, message: str, intent_trace: IntentTrace, validated_action) -> None:
+    def _refine_issue_targeting(
+        self,
+        message: str,
+        intent_trace: IntentTrace,
+        validated_action,
+        workspace_scope: WorkspaceScope,
+    ) -> None:
         if validated_action and validated_action.type in {
             "OPEN_DEMO_ISSUE",
             "HIGHLIGHT_ASSIGNMENT_CONTROL",
@@ -329,7 +517,12 @@ class DemoAgent:
                 intent_trace.confidence = 0.88
                 return
 
-            issue = find_issue_by_person(message)
+            issue_id = validated_action.payload.get("issue_id")
+            issue = find_issue_by_id(issue_id) if isinstance(issue_id, str) else find_issue_by_person_in_scope(
+                message,
+                set(workspace_scope.allowed_project_ids),
+                set(workspace_scope.allowed_issue_projects),
+            )
             if issue:
                 intent_trace.goal = "Issue lookup"
                 intent_trace.current_intent = (

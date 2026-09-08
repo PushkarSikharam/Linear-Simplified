@@ -1,7 +1,7 @@
 import { SpectrumData, VoiceAnalyzer } from "@/lib/voice-analyzer";
 
-export type VoiceEngineMode = "gemini" | "webrtc" | "local" | "connecting";
-export type VoiceEngineStatus = "Idle" | "Connecting" | "Listening" | "Thinking" | "Speaking" | "Error";
+export type VoiceEngineMode = "azure" | "gemini" | "webrtc" | "local" | "connecting";
+export type VoiceEngineStatus = "Idle" | "Connecting" | "Listening" | "Thinking" | "Preparing" | "Speaking" | "Error";
 
 export type HybridVoiceCallbacks = {
   onStatusChange: (status: VoiceEngineStatus, mode: VoiceEngineMode) => void;
@@ -117,11 +117,11 @@ export class HybridVoiceEngine {
     this.cancelSpeech();
     this.pauseRecognition();
 
-    // Try cloud TTS (Gemini Aoede natural voice) with a fast 1.5s timeout.
-    // Falls back instantly to browser voice if cloud is slow or quota-exhausted.
+    // Give Microsoft Azure enough time to synthesize premium speech before falling back.
+    // The fallback is intentionally visible in the UI so the demo never mislabels audio.
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1500);
+      const timer = setTimeout(() => controller.abort(), 8000);
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -132,7 +132,9 @@ export class HybridVoiceEngine {
 
       if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
         const engineType = res.headers.get("X-TTS-Engine");
-        if (engineType?.includes("gemini")) {
+        if (engineType?.includes("azure")) {
+          this.mode = "azure";
+        } else if (engineType?.includes("gemini")) {
           this.mode = "gemini";
         }
 
@@ -217,6 +219,9 @@ export class HybridVoiceEngine {
       return;
     }
 
+    this.mode = "local";
+    this.callbacks.onStatusChange(this.status, this.mode);
+
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
 
@@ -285,6 +290,34 @@ export class HybridVoiceEngine {
   // In-memory cache for TTS audio blobs to avoid re-fetching the same text
   private static ttsCache = new Map<string, Blob>();
 
+  public prewarmSpeech(texts: string[]): void {
+    for (const text of texts) {
+      const normalized = text.trim();
+      if (!normalized || HybridVoiceEngine.ttsCache.has(normalized)) continue;
+
+      fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: normalized })
+      })
+        .then((res) => {
+          if (!res.ok || !res.headers.get("Content-Type")?.includes("audio")) return null;
+          const engineType = res.headers.get("X-TTS-Engine");
+          if (engineType?.includes("azure")) {
+            this.mode = "azure";
+            this.callbacks.onStatusChange(this.status, this.mode);
+          }
+          return res.blob();
+        })
+        .then((blob) => {
+          if (blob) {
+            HybridVoiceEngine.ttsCache.set(normalized, blob);
+          }
+        })
+        .catch(() => undefined);
+    }
+  }
+
   public speakOnly(text: string, onEnded?: () => void): void {
     this.isStopped = false;
     this.cancelSpeech();
@@ -297,6 +330,9 @@ export class HybridVoiceEngine {
 
     const playBrowserVoice = () => {
       if (gen !== this.speakOnlyGen) return; // Stale — cancelled
+
+      this.mode = "local";
+      this.callbacks.onStatusChange(this.status, this.mode);
 
       const doSpeak = () => {
         try { window.speechSynthesis.resume(); } catch { /* ignore */ }
@@ -331,8 +367,14 @@ export class HybridVoiceEngine {
       this.currentAudioUrl = url;
       const audio = new Audio(url);
       this.currentAudio = audio;
+      audio.onplay = () => {
+        if (gen !== this.speakOnlyGen) return;
+        this.setStatus("Speaking", this.mode);
+        this.callbacks.onAgentSpeech(text);
+      };
       audio.onended = () => {
         this.cancelSpeech();
+        this.setStatus("Idle", this.mode);
         onEnded?.();
       };
       audio.onerror = () => {
@@ -349,14 +391,15 @@ export class HybridVoiceEngine {
       return;
     }
 
-    // Try cloud TTS (Gemini Aoede) with 2s timeout, fall back to browser voice
+    // Try server-side neural TTS first. Azure can take a few seconds on cold requests.
+    this.setStatus("Preparing", this.mode === "local" ? "azure" : this.mode);
     this.speakOnlyAbort = new AbortController();
     const signal = this.speakOnlyAbort.signal;
     const fetchTimer = setTimeout(() => {
       if (gen === this.speakOnlyGen && this.speakOnlyAbort) {
         this.speakOnlyAbort.abort();
       }
-    }, 2000);
+    }, 8000);
 
     fetch("/api/tts", {
       method: "POST",
@@ -368,6 +411,15 @@ export class HybridVoiceEngine {
         clearTimeout(fetchTimer);
         if (gen !== this.speakOnlyGen) return;
         if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
+          const engineType = res.headers.get("X-TTS-Engine");
+          if (engineType?.includes("azure")) {
+            this.mode = "azure";
+            this.callbacks.onStatusChange(this.status, this.mode);
+          } else if (engineType?.includes("gemini")) {
+            this.mode = "gemini";
+            this.callbacks.onStatusChange(this.status, this.mode);
+          }
+
           return res.blob().then((blob) => {
             if (gen !== this.speakOnlyGen) return;
             // Cache for future use
@@ -653,4 +705,3 @@ export function getBestNaturalVoice(voices: SpeechSynthesisVoice[]): SpeechSynth
 
   return pool[0];
 }
-

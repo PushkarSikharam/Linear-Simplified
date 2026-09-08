@@ -1,9 +1,28 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { actionByPage, executeDemoAction } from "@/lib/action-executor";
 import { cancelAgentTurn, type AgentTurnResponse, sendAgentTurn } from "@/lib/agent-api";
-import { demoIssues, demoProjects, demoCycle, demoTeam, integrations } from "@/lib/demo-data";
+import {
+  demoIssues,
+  demoProjects,
+  demoCycle,
+  demoCycles,
+  demoTeam,
+  demoWorkspaceScope,
+  demoWorkspaceScopes,
+  integrations
+} from "@/lib/demo-data";
+import {
+  loadDemoData,
+  resetStoredDemoData,
+  saveStoredCycle,
+  saveStoredIssue,
+  saveStoredProject,
+  saveStoredTeamMember,
+  updateStoredIssue
+} from "@/lib/product-data-api";
 import { productConfig } from "@/lib/product-config";
 import { HybridVoiceEngine, VoiceEngineMode, VoiceEngineStatus } from "@/lib/hybrid-voice-engine";
 import type { SpectrumData } from "@/lib/voice-analyzer";
@@ -11,8 +30,10 @@ import type {
   DemoAction,
   DemoCycle,
   DemoIssue,
+  DemoPage,
   DemoProject,
   DemoTeamMember,
+  DemoWorkspaceScope,
   IntentTrace,
   SessionUiState,
   UiEvent
@@ -39,7 +60,7 @@ type TranscriptMessage = {
 
 type SessionSummary = AgentTurnResponse["session_summary"];
 type InputMode = "text" | "voice";
-type VoiceStatus = "Idle" | "Listening" | "Processing" | "Speaking" | "Unavailable";
+type VoiceStatus = "Idle" | "Listening" | "Processing" | "Preparing" | "Speaking" | "Unavailable";
 const DEFAULT_VOICE_SILENCE_TIMEOUT_MS = 3500;
 
 type DraftPrefill = {
@@ -95,6 +116,7 @@ type SpeechRecognitionWindow = Window &
     webkitSpeechRecognition?: SpeechRecognitionConstructor;
     __demoVoiceSilenceTimeoutMs?: number;
     __disableAutoGreetingSpeech?: boolean;
+    __disableTextResponseSpeech?: boolean;
     __emitVoiceTranscript?: (transcript: string) => void;
   };
 
@@ -103,6 +125,16 @@ const initialTranscript: TranscriptMessage[] = [
     speaker: "Agent",
     text: "Welcome to Pixel. I'm Edith, your guide to planning work, tracking tickets, and connecting your team's tools. What brought you to check us out today?"
   }
+];
+
+const prewarmedVoiceLines = [
+  initialTranscript[0].text,
+  "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+  "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+  "Assignment is handled from the issue detail panel. I'll open a demo issue and highlight the assignee control.",
+  "GitHub keeps engineering activity connected to tickets. Pull requests, commits, branches, and reviews can appear beside the work they belong to. I'll show the GitHub integration.",
+  "Slack lets teams create issues from messages and receive workflow updates where conversations happen. I'll open Integrations and highlight Slack.",
+  "I can only demonstrate Pixel workflows here, so I cannot open that."
 ];
 
 const initialSessionSummary: SessionSummary = {
@@ -146,8 +178,10 @@ export default function Home() {
   const [messages, setMessages] = useState<TranscriptMessage[]>(initialTranscript);
   const [issues, setIssues] = useState<DemoIssue[]>(demoIssues);
   const [projects, setProjects] = useState<DemoProject[]>(demoProjects);
-  const [cycles, setCycles] = useState<DemoCycle[]>([demoCycle]);
+  const [cycles, setCycles] = useState<DemoCycle[]>(demoCycles);
   const [team, setTeam] = useState<DemoTeamMember[]>(demoTeam);
+  const [workspaceScopes, setWorkspaceScopes] = useState<DemoWorkspaceScope[]>(demoWorkspaceScopes);
+  const [workspaceScope, setWorkspaceScope] = useState<DemoWorkspaceScope>(demoWorkspaceScope);
   const [draftPrefill, setDraftPrefill] = useState<DraftPrefill>({});
   const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -157,18 +191,116 @@ export default function Home() {
     () => navItems.find((item) => item.id === currentPage),
     [currentPage]
   );
+  const scopedProjects = useMemo(
+    () => projects.filter((project) => workspaceScope.allowedProjectIds.includes(project.id)),
+    [projects, workspaceScope]
+  );
+  const scopedIssues = useMemo(
+    () => filterIssuesByScope(issues, workspaceScope),
+    [issues, workspaceScope]
+  );
+  const scopedTeam = useMemo(
+    () => filterTeamByScope(team, workspaceScope, scopedIssues),
+    [team, workspaceScope, scopedIssues]
+  );
+  const scopedCycles = useMemo(
+    () => cycles.filter((cycle) => isCycleInScope(cycle, workspaceScope)),
+    [cycles, workspaceScope]
+  );
+  const latestEvent = uiEvents[0];
+  const [dismissedEventId, setDismissedEventId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    loadDemoData()
+      .then((demoData) => {
+        if (!isMounted) return;
+        setIssues(demoData.issues);
+        setProjects(demoData.projects);
+        setCycles(demoData.cycles);
+        setTeam(demoData.team);
+        setWorkspaceScopes(demoData.workspaceScopes);
+        setWorkspaceScope((currentScope) => {
+          return demoData.workspaceScopes.find((scope) => scope.id === currentScope.id)
+            ?? demoData.workspaceScopes[0]
+            ?? demoWorkspaceScope;
+        });
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  function switchWorkspaceScope(scopeId: string) {
+    const nextScope = workspaceScopes.find((scope) => scope.id === scopeId);
+    if (!nextScope || nextScope.id === workspaceScope.id) return;
+    const activeTurnId = activeTurnIdRef.current;
+    if (activeTurnId !== null) {
+      void cancelAgentTurn({ sessionId, turnId: activeTurnId }).catch(() => undefined);
+      activeTurnIdRef.current = null;
+    }
+
+    setWorkspaceScope(nextScope);
+    setDraftPrefill({});
+    setIntentTrace({
+      ...initialTrace,
+      relevant_feature: "Dashboard",
+      reason: `${nextScope.name} is now the active project scope.`
+    });
+    setSessionSummary((currentSummary) => ({
+      ...currentSummary,
+      last_person: null,
+      last_feature: nextScope.name,
+      clarification_pending: null
+    }));
+    setUiState((currentState) => ({
+      ...currentState,
+      current_page: currentState.current_page === "issue_detail" ? "dashboard" : currentState.current_page,
+      highlighted_target: undefined,
+      selected_issue_id: undefined,
+      issue_filter_assignee: undefined
+    }));
+    setTurnStatus("Ready");
+    setIsSending(false);
+    recordUiEvent({
+      id: crypto.randomUUID(),
+      action_type: "SWITCH_WORKSPACE_SCOPE",
+      status: "executed",
+      description: `Switched active workspace to ${nextScope.name}.`,
+      created_at: new Date().toISOString()
+    });
+  }
 
   function runAction(action: DemoAction) {
     setUiState((currentState) => {
       const nextIssues =
         action.type === "CREATE_DEMO_ISSUE"
-          ? upsertIssue(issues, action.payload)
+          ? upsertIssue(issues, withScopedIssue(action.payload, scopedProjects, workspaceScope))
+          : action.type === "UPDATE_DEMO_ISSUE"
+            ? applyIssueUpdate(issues, action.payload)
           : issues;
-      const result = executeDemoAction(currentState, action, { issues: nextIssues });
-      if (action.type === "CREATE_DEMO_ISSUE" && result.event.status === "executed") {
+      const scopedNextIssues = filterIssuesByScope(nextIssues, workspaceScope);
+      const result = executeDemoAction(currentState, action, { issues: scopedNextIssues });
+      if (
+        (action.type === "CREATE_DEMO_ISSUE" || action.type === "UPDATE_DEMO_ISSUE")
+        && result.event.status === "executed"
+      ) {
         setIssues(nextIssues);
+        const changedIssue =
+          action.type === "CREATE_DEMO_ISSUE"
+            ? withScopedIssue(action.payload, scopedProjects, workspaceScope)
+            : nextIssues.find((issue) => issue.id === action.payload.issue_id);
+        if (changedIssue) {
+          const persistIssue =
+            action.type === "CREATE_DEMO_ISSUE" ? saveStoredIssue : updateStoredIssue;
+          void persistIssue(changedIssue).catch(() => undefined);
+        }
       }
-      setUiEvents((events) => [result.event, ...events].slice(0, 6));
+      const visibleEvent = savedWorkspaceEvent(result.event, workspaceScope.name, action, nextIssues);
+      setUiEvents((events) => [visibleEvent, ...events].slice(0, 6));
       return result.nextState;
     });
   }
@@ -196,35 +328,54 @@ export default function Home() {
     setMessages(initialTranscript);
     setIssues(demoIssues);
     setProjects(demoProjects);
-    setCycles([demoCycle]);
+    setCycles(demoCycles);
     setTeam(demoTeam);
+    setWorkspaceScopes(demoWorkspaceScopes);
+    setWorkspaceScope(demoWorkspaceScope);
     setDraftPrefill({});
     setIsSending(false);
     setTurnStatus("Ready");
+    void resetStoredDemoData()
+      .then((demoData) => {
+        setIssues(demoData.issues);
+        setProjects(demoData.projects);
+        setCycles(demoData.cycles);
+        setTeam(demoData.team);
+        setWorkspaceScopes(demoData.workspaceScopes);
+        setWorkspaceScope(demoData.workspaceScopes[0] ?? demoWorkspaceScope);
+      })
+      .catch(() => undefined);
   }
 
   function createIssue(issue: DemoIssue) {
-    const nextIssues = upsertIssue(issues, issue);
+    const scopedIssue = withScopedIssue(issue, scopedProjects, workspaceScope);
+    const nextIssues = upsertIssue(issues, scopedIssue);
     setIssues(nextIssues);
     setDraftPrefill((currentPrefill) => ({
       ...currentPrefill,
       issue: undefined,
       issueUpdate: undefined
     }));
-    runAction({ type: "CREATE_DEMO_ISSUE", payload: issue });
+    runAction({ type: "CREATE_DEMO_ISSUE", payload: scopedIssue });
+    void saveStoredIssue(scopedIssue).catch(() => undefined);
   }
 
   function createTeamMember(member: DemoTeamMember) {
     const pendingIssueDraft = draftPrefill.issue;
     const pendingIssueUpdate = draftPrefill.issueUpdate;
-    setTeam((currentTeam) => [...currentTeam, member]);
+    const scopedMember = {
+      ...member,
+      projectIds: member.projectIds ?? [...workspaceScope.allowedProjectIds]
+    };
+    setTeam((currentTeam) => [...currentTeam, scopedMember]);
+    void saveStoredTeamMember(scopedMember, workspaceScope.id).catch(() => undefined);
     setDraftPrefill((currentPrefill) => ({
       ...currentPrefill,
       teamMember: undefined,
       issue: currentPrefill.issue
         ? {
-            ...currentPrefill.issue,
-            assignee: member.name
+          ...currentPrefill.issue,
+            assignee: scopedMember.name
           }
         : undefined
     }));
@@ -234,7 +385,7 @@ export default function Home() {
       if (issue) {
         const updatedIssue = {
           ...issue,
-          assignee: pendingIssueUpdate.assignee ?? member.name,
+          assignee: pendingIssueUpdate.assignee ?? scopedMember.name,
           priority: pendingIssueUpdate.priority ?? issue.priority,
           status: pendingIssueUpdate.status ?? issue.status
         };
@@ -251,7 +402,7 @@ export default function Home() {
           ...currentMessages,
           {
             speaker: "Agent",
-            text: `${member.name} has been added. I assigned ${issue.id} to ${member.name}.`
+            text: `${scopedMember.name} has been added. I assigned ${issue.id} to ${scopedMember.name}.`
           }
         ]);
       }
@@ -266,7 +417,7 @@ export default function Home() {
         ...currentMessages,
         {
           speaker: "Agent",
-          text: `${member.name} has been added. I'll open the ticket form with ${member.name} selected.`
+          text: `${scopedMember.name} has been added. I'll open the ticket form with ${scopedMember.name} selected.`
         }
       ]);
     }
@@ -274,7 +425,7 @@ export default function Home() {
       id: crypto.randomUUID(),
       action_type: "CREATE_DEMO_TEAM_MEMBER",
       status: "executed",
-      description: `Added team member ${member.name} (${member.role}).`,
+      description: `Saved to ${workspaceScope.name}: added ${scopedMember.name} (${scopedMember.role}).`,
       created_at: new Date().toISOString()
     });
   }
@@ -283,17 +434,24 @@ export default function Home() {
     setIssues((currentIssues) =>
       currentIssues.map((item) => (item.id === updatedIssue.id ? updatedIssue : item))
     );
+    void updateStoredIssue(updatedIssue).catch(() => undefined);
     recordUiEvent({
       id: crypto.randomUUID(),
       action_type: "UPDATE_DEMO_ISSUE",
       status: "executed",
-      description: `Updated issue ${updatedIssue.id} details (Assignee: ${updatedIssue.assignee}, Priority: ${updatedIssue.priority}, Status: ${updatedIssue.status}).`,
+      description: `Saved to ${workspaceScope.name}: updated ${updatedIssue.id} (Assignee: ${updatedIssue.assignee}, Priority: ${updatedIssue.priority}, Status: ${updatedIssue.status}).`,
       created_at: new Date().toISOString()
     });
   }
 
   function createProject(project: DemoProject) {
     setProjects((currentProjects) => [project, ...currentProjects]);
+    const nextScope = addProjectToScope(workspaceScope, project);
+    setWorkspaceScope(nextScope);
+    setWorkspaceScopes((currentScopes) =>
+      currentScopes.map((scope) => (scope.id === workspaceScope.id ? nextScope : scope))
+    );
+    void saveStoredProject(project, workspaceScope.id).catch(() => undefined);
     setUiState((currentState) => ({
       ...currentState,
       current_page: "projects",
@@ -304,13 +462,18 @@ export default function Home() {
       id: crypto.randomUUID(),
       action_type: "CREATE_DEMO_PROJECT",
       status: "executed",
-      description: `Created demo project ${project.name}.`,
+      description: `Saved to ${workspaceScope.name}: created project ${project.name}.`,
       created_at: new Date().toISOString()
     });
   }
 
   function createCycle(cycle: DemoCycle) {
-    setCycles((currentCycles) => [cycle, ...currentCycles]);
+    const scopedCycle = {
+      ...cycle,
+      projectId: cycle.projectId ?? workspaceScope.allowedProjectIds[0]
+    };
+    setCycles((currentCycles) => [scopedCycle, ...currentCycles]);
+    void saveStoredCycle(scopedCycle).catch(() => undefined);
     setUiState((currentState) => ({
       ...currentState,
       current_page: "cycles",
@@ -321,7 +484,7 @@ export default function Home() {
       id: crypto.randomUUID(),
       action_type: "CREATE_DEMO_CYCLE",
       status: "executed",
-      description: `Created demo cycle ${cycle.name}.`,
+      description: `Saved to ${workspaceScope.name}: created cycle ${scopedCycle.name}.`,
       created_at: new Date().toISOString()
     });
   }
@@ -330,9 +493,20 @@ export default function Home() {
     const trimmedMessage = message.trim();
     if (!trimmedMessage) return null;
 
-    const localConversationResponse = handleLocalConversationIntent(trimmedMessage);
-    if (localConversationResponse) {
-      return localConversationResponse;
+    const previousTurnId = activeTurnIdRef.current;
+    if (previousTurnId !== null) {
+      void cancelAgentTurn({ sessionId, turnId: previousTurnId }).catch(() => undefined);
+      activeTurnIdRef.current = null;
+      setIsSending(false);
+      setUiState((currentState) => ({
+        ...currentState,
+        active_turn_id: null
+      }));
+    }
+
+    const localScopeResponse = handleScopeBoundaryIntent(trimmedMessage);
+    if (localScopeResponse) {
+      return localScopeResponse;
     }
 
     const localDraftResponse = handleLocalDraftIntent(trimmedMessage);
@@ -340,9 +514,9 @@ export default function Home() {
       return localDraftResponse;
     }
 
-    const previousTurnId = activeTurnIdRef.current;
-    if (previousTurnId !== null) {
-      void cancelAgentTurn({ sessionId, turnId: previousTurnId }).catch(() => undefined);
+    const localConversationResponse = handleLocalConversationIntent(trimmedMessage, inputMode);
+    if (localConversationResponse) {
+      return localConversationResponse;
     }
 
     const turnId = nextTurnIdRef.current;
@@ -367,6 +541,7 @@ export default function Home() {
         message: trimmedMessage,
         inputMode,
         currentPage,
+        workspaceScopeId: workspaceScope.id,
         selectedIssueId: uiState.selected_issue_id
       });
 
@@ -429,6 +604,13 @@ export default function Home() {
           text: "I could not reach the demo agent service. Please check that the backend is running."
         }
       ]);
+      recordUiEvent({
+        id: crypto.randomUUID(),
+        action_type: "AGENT_SERVICE",
+        status: "rejected",
+        description: "Edith could not reach the demo agent service.",
+        created_at: new Date().toISOString()
+      });
       return null;
     } finally {
       if (activeTurnIdRef.current === turnId) {
@@ -442,12 +624,13 @@ export default function Home() {
     }
   }
 
-  function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
+function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
     const draftRequest = parseTicketDraftRequest(message);
     if (!draftRequest) return null;
 
     const requestedName = draftRequest.assignee;
-    const matchingMember = requestedName ? findTeamMember(team, requestedName) : undefined;
+    const companyMember = requestedName ? findTeamMember(team, requestedName) : undefined;
+    const matchingMember = requestedName ? findTeamMember(scopedTeam, requestedName) : undefined;
     const turnId = nextTurnIdRef.current;
     nextTurnIdRef.current += 1;
 
@@ -455,6 +638,39 @@ export default function Home() {
       ...currentMessages,
       { speaker: "Visitor", text: message }
     ]);
+
+    if (!requestedName) {
+      const speech = "Who should own this ticket? Name a teammate in this workspace and I'll prefill the ticket form.";
+      setUiState((currentState) => ({
+        ...currentState,
+        current_page: "issues",
+        highlighted_target: "create_ticket_button",
+        issue_filter_assignee: undefined,
+        active_turn_id: null
+      }));
+      setTurnStatus("Ready");
+      setMessages((currentMessages) => [...currentMessages, { speaker: "Agent", text: speech }]);
+
+      return localTurnResponse({
+        action: { type: "HIGHLIGHT_CREATE_TICKET_BUTTON" },
+        message: speech,
+        sessionId,
+        turnId
+      });
+    }
+
+    if (requestedName && companyMember && !matchingMember) {
+      const speech = `${companyMember.name} is outside ${workspaceScope.name}, so I can't create or assign work for them here.`;
+      setTurnStatus("Ready");
+      setMessages((currentMessages) => [...currentMessages, { speaker: "Agent", text: speech }]);
+
+      return localTurnResponse({
+        action: null,
+        message: speech,
+        sessionId,
+        turnId
+      });
+    }
 
     if (requestedName && !matchingMember) {
       const speech = `${requestedName} is not in the team directory yet. I'll open Teams so you can add ${requestedName} first.`;
@@ -511,7 +727,10 @@ export default function Home() {
     });
   }
 
-  function handleLocalConversationIntent(message: string): AgentTurnResponse | null {
+  function handleLocalConversationIntent(
+    message: string,
+    inputMode: InputMode
+  ): AgentTurnResponse | null {
     const text = normalizeText(message);
     const turnId = nextTurnIdRef.current;
     const sayAndReturn = (speech: string, action: DemoAction | null = null) => {
@@ -535,14 +754,57 @@ export default function Home() {
 
     if (asksForEvaluatorDemo(text)) {
       return sayAndReturn(
-        "Here is the strongest demo path: start with sprint planning, open Maya's ticket, assign it to Noah, create a ticket for a new teammate, then try Salesforce to prove guardrails.",
+        "Here is a clean guided path: start with sprint planning, open Maya's ticket, assign it to Noah, create a ticket for a new teammate, then try Salesforce to prove guardrails.",
         { type: "OPEN_DASHBOARD" }
+      );
+    }
+
+    if (asksVagueCreateRequest(text)) {
+      return sayAndReturn(
+        "What should I create: a ticket, a project, a cycle, or a team member?"
+      );
+    }
+
+    if (asksVagueAssignmentRequest(text)) {
+      const selectedIssue = issues.find((issue) => issue.id === uiState.selected_issue_id);
+      const targetText = selectedIssue ? ` ${selectedIssue.id}` : " the current ticket";
+      return sayAndReturn(
+        `Who should I assign${targetText} to? You can say Maya, Noah, or another teammate in this workspace.`
+      );
+    }
+
+    if (asksBroadWorkspaceRequest(text)) {
+      return sayAndReturn(
+        `I can only show work inside ${workspaceScope.name}. Use the workspace switcher to change scope, then ask me again.`
       );
     }
 
     if (asksCapabilities(text)) {
       return sayAndReturn(
-        "I can guide this Pixel demo through planning, issues, projects, teams, and integrations. I can open views, find tickets, update issue fields, create demo records, and block actions outside Pixel."
+        `I can guide this Pixel demo through ${workspaceScope.name}: planning, issues, projects, teams, and integrations. I can open views, find tickets, update issue fields, create demo records, and block work outside this scope.`
+      );
+    }
+
+    if (asksForNextStep(text)) {
+      return sayAndReturn(nextStepSpeech(currentPage, workspaceScope.name));
+    }
+
+    const githubAction = inputMode === "text" ? githubConversationActionFor(text) : null;
+    if (githubAction) {
+      return sayAndReturn(githubAction.speech, githubAction.action);
+    }
+
+    if (asksTeamCount(text)) {
+      return sayAndReturn(
+        `There are ${scopedTeam.length} team members in ${workspaceScope.name}. I'll open Teams.`,
+        { type: "OPEN_TEAMS" }
+      );
+    }
+
+    if (asksProjectCount(text)) {
+      return sayAndReturn(
+        `${workspaceScope.name} has ${scopedProjects.length} visible projects: ${formatNames(scopedProjects.map((project) => project.name))}. I'll open Projects.`,
+        { type: "OPEN_PROJECTS" }
       );
     }
 
@@ -559,6 +821,11 @@ export default function Home() {
       return sayAndReturn(correctionSpeech(correctionAction), correctionAction);
     }
 
+    const personTicketAction = scopedPersonTicketActionFor(message, scopedIssues);
+    if (personTicketAction) {
+      return sayAndReturn(personTicketAction.speech, personTicketAction.action);
+    }
+
     const updateDraft = parseIssueUpdateRequest(message);
     if (!updateDraft) return null;
 
@@ -571,7 +838,13 @@ export default function Home() {
 
     if (updateDraft.assignee) {
       const member = findTeamMember(team, updateDraft.assignee);
-      if (!member) {
+      const scopedMember = findTeamMember(scopedTeam, updateDraft.assignee);
+      if (member && !scopedMember) {
+        return sayAndReturn(
+          `${member.name} is outside ${workspaceScope.name}, so I can't show or change their project work here.`
+        );
+      }
+      if (!scopedMember) {
         setDraftPrefill({
           teamMember: { name: updateDraft.assignee },
           issueUpdate: {
@@ -593,7 +866,7 @@ export default function Home() {
           { type: "HIGHLIGHT_ADD_MEMBER_BUTTON", payload: { name: updateDraft.assignee } }
         );
       }
-      updateDraft.assignee = member.name;
+      updateDraft.assignee = scopedMember.name;
     }
 
     const updatedIssue = {
@@ -622,8 +895,39 @@ export default function Home() {
     });
   }
 
+  function handleScopeBoundaryIntent(message: string): AgentTurnResponse | null {
+    const referencedName = extractReferencedPersonName(message);
+    if (!referencedName || !mentionsScopedWork(message)) return null;
+
+    const companyMember = findTeamMember(team, referencedName);
+    const scopedMember = findTeamMember(scopedTeam, referencedName);
+    if (!companyMember || scopedMember) return null;
+
+    const turnId = nextTurnIdRef.current;
+    nextTurnIdRef.current += 1;
+    const speech = `${companyMember.name} is outside ${workspaceScope.name}, so I can't show or change their project work here.`;
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      { speaker: "Visitor", text: message },
+      { speaker: "Agent", text: speech }
+    ]);
+    setTurnStatus("Ready");
+    return localTurnResponse({
+      action: null,
+      message: speech,
+      sessionId,
+      turnId
+    });
+  }
+
   return (
     <main className={isAssistantCollapsed ? "app-shell assistant-collapsed" : "app-shell"}>
+      {latestEvent && dismissedEventId !== latestEvent.id && (
+        <ActivityPopup
+          event={latestEvent}
+          onDismiss={() => setDismissedEventId(latestEvent.id)}
+        />
+      )}
       <aside className="sidebar" aria-label="Product navigation">
         <div className="brand-block">
           <div className="brand-mark">P</div>
@@ -647,7 +951,10 @@ export default function Home() {
             </button>
           ))}
         </nav>
-
+        <Link className="architecture-nav-link" href="/architecture">
+          <span className="nav-shortcut">A</span>
+          <span>System architecture</span>
+        </Link>
       </aside>
 
       <section className="workspace">
@@ -655,10 +962,25 @@ export default function Home() {
           <div>
             <p className="section-kicker">Current View</p>
             <h1 data-testid="current-view-title">{activeNavItem?.label ?? "Issue Detail"}</h1>
+            <p className="scope-caption">
+              {workspaceScope.name}: only scoped projects, tickets, cycles, and team members are visible.
+            </p>
           </div>
           <div className="status-strip">
             <span className="status-dot" />
-            <span>Controlled demo environment</span>
+            <select
+              aria-label="Workspace scope"
+              className="workspace-switcher"
+              data-testid="workspace-switcher"
+              onChange={(event) => switchWorkspaceScope(event.target.value)}
+              value={workspaceScope.id}
+            >
+              {workspaceScopes.map((scope) => (
+                <option key={scope.id} value={scope.id}>
+                  {scope.name}
+                </option>
+              ))}
+            </select>
           </div>
         </header>
 
@@ -667,14 +989,15 @@ export default function Home() {
           createIssue={createIssue}
           createProject={createProject}
           createTeamMember={createTeamMember}
-          cycles={cycles}
+          cycles={scopedCycles}
           draftPrefill={draftPrefill}
-          issues={issues}
-          projects={projects}
+          issues={scopedIssues}
+          projects={scopedProjects}
           runAction={runAction}
-          team={team}
+          team={scopedTeam}
           uiState={uiState}
           updateIssue={updateIssue}
+          workspaceScope={workspaceScope}
         />
       </section>
 
@@ -693,6 +1016,7 @@ export default function Home() {
           </button>
         ) : (
           <ConversationCard
+            demoPathPrompts={demoPathPrompts}
             demoPrompts={demoPrompts}
             isSending={isSending}
             messages={messages}
@@ -719,7 +1043,8 @@ function ProductSurface({
   team,
   uiState,
   runAction,
-  updateIssue
+  updateIssue,
+  workspaceScope
 }: {
   createCycle: (cycle: DemoCycle) => void;
   createIssue: (issue: DemoIssue) => void;
@@ -733,6 +1058,7 @@ function ProductSurface({
   uiState: SessionUiState;
   runAction: (action: DemoAction) => void;
   updateIssue: (issue: DemoIssue) => void;
+  workspaceScope: DemoWorkspaceScope;
 }) {
   if (uiState.current_page === "issues") {
     return (
@@ -766,6 +1092,8 @@ function ProductSurface({
         createProject={createProject}
         highlightedTarget={uiState.highlighted_target}
         projects={projects}
+        team={team}
+        workspaceScope={workspaceScope}
       />
     );
   }
@@ -775,6 +1103,7 @@ function ProductSurface({
         createCycle={createCycle}
         cycles={cycles}
         highlightedTarget={uiState.highlighted_target}
+        workspaceScope={workspaceScope}
       />
     );
   }
@@ -785,44 +1114,148 @@ function ProductSurface({
         draftPrefill={draftPrefill.teamMember}
         highlightedTarget={uiState.highlighted_target}
         team={team}
+        workspaceScope={workspaceScope}
       />
     );
   }
   if (uiState.current_page === "integrations") {
     return <IntegrationsView highlightedTarget={uiState.highlighted_target} />;
   }
-  return <DashboardView cycles={cycles} issues={issues} projects={projects} runAction={runAction} />;
+  return (
+    <DashboardView
+      cycles={cycles}
+      issues={issues}
+      projects={projects}
+      runAction={runAction}
+      team={team}
+      workspaceScope={workspaceScope}
+    />
+  );
 }
 
 function DashboardView({
   cycles,
   issues,
   projects,
-  runAction
+  runAction,
+  team,
+  workspaceScope
 }: {
   cycles: DemoCycle[];
   issues: DemoIssue[];
   projects: DemoProject[];
   runAction: (action: DemoAction) => void;
+  team: DemoTeamMember[];
+  workspaceScope: DemoWorkspaceScope;
 }) {
   const activeCycle = cycles[0] ?? demoCycle;
   const atRiskProjects = projects.filter((project) => project.status === "At risk").length;
+  const urgentIssues = issues.filter((issue) => issue.priority === "High").length;
+  const activeProject = projects.find((project) => project.status === "Active") ?? projects[0];
+  const nextMilestone = activeProject?.targetDate ?? "No milestone set";
+  const averageLoad =
+    team.length > 0
+      ? Math.round(team.reduce((total, member) => total + member.load, 0) / team.length)
+      : 0;
+  const reviewIssues = issues.filter((issue) => issue.status === "Review").length;
+  const inProgressIssues = issues.filter((issue) => issue.status === "In progress").length;
+  const availableCapacity = Math.max(0, 100 - averageLoad);
+  const cycleCompletion = activeCycle.completed + activeCycle.inProgress + activeCycle.remaining;
+  const deliveryConfidence =
+    activeCycle.progress >= 65 && atRiskProjects === 0
+      ? "On track"
+      : activeCycle.progress >= 40
+        ? "Watch closely"
+        : "Needs attention";
 
   return (
     <div className="content-grid">
-      <section className="panel wide">
+      <section className="panel wide dashboard-hero">
         <div className="panel-header">
           <div>
-            <p className="section-kicker">Engineering Overview</p>
-            <h2>Product development pulse</h2>
+            <p className="section-kicker">Scoped Workspace</p>
+            <h2>{workspaceScope.name}</h2>
+            <p className="body-copy">{workspaceScope.description}</p>
           </div>
-          <span className="quiet-badge">Demo data</span>
+          <span className="quiet-badge" data-testid="workspace-scope-badge">
+            {projects.length} scoped projects
+          </span>
         </div>
         <div className="metric-grid">
-          <Metric label="Open issues" value={`${issues.length}`} delta="sample workspace" />
+          <Metric label="Scoped issues" value={`${issues.length}`} delta="visible to this team" />
           <Metric label="Cycle progress" value={`${activeCycle.progress}%`} delta={`${activeCycle.daysLeft} days left`} />
           <Metric label="Active projects" value={`${projects.length}`} delta={`${atRiskProjects} at risk`} />
-          <Metric label="Team workload" value="81%" delta="balanced" />
+          <Metric label="Team workload" value={`${averageLoad}%`} delta={`${team.length} scoped members`} />
+        </div>
+        <div className="dashboard-scope-insights">
+          <article>
+            <span>Primary focus</span>
+            <strong>{activeProject?.name ?? "No active project"}</strong>
+            <p>{activeProject?.description ?? "Create a project to start tracking scoped work."}</p>
+          </article>
+          <article>
+            <span>Risk signal</span>
+            <strong>{urgentIssues} high priority</strong>
+            <p>{atRiskProjects > 0 ? "Review at-risk project scope before the next sync." : "No scoped projects are marked at risk."}</p>
+          </article>
+          <article>
+            <span>Next milestone</span>
+            <strong>{nextMilestone}</strong>
+            <p>{activeCycle.name} is the current planning window for this workspace.</p>
+          </article>
+        </div>
+        <div className="scope-lockup" data-testid="scope-lockup">
+          <div>
+            <span>Project boundary</span>
+            <strong>{workspaceScope.name}</strong>
+          </div>
+          <p>
+            Edith answers and acts only inside {workspaceScope.allowedIssueProjects.join(" and ")}.
+            Requests for another workspace are blocked instead of shown.
+          </p>
+        </div>
+      </section>
+
+      <section className="panel wide command-center">
+        <div className="panel-header">
+          <div>
+            <p className="section-kicker">Operating View</p>
+            <h2>{workspaceScope.name.replace(" Workspace", "")} command center</h2>
+          </div>
+          <span className="quiet-badge">{deliveryConfidence}</span>
+        </div>
+        <div className="command-center-grid">
+          <article className="delivery-card">
+            <span>Delivery confidence</span>
+            <strong>{deliveryConfidence}</strong>
+            <p>
+              {activeCycle.progress}% cycle progress across {cycleCompletion} planned work items.
+            </p>
+          </article>
+          <article className="delivery-card">
+            <span>Execution queue</span>
+            <strong>{inProgressIssues} in progress</strong>
+            <p>{reviewIssues} waiting for review, {urgentIssues} high priority.</p>
+          </article>
+          <article className="delivery-card">
+            <span>Capacity buffer</span>
+            <strong>{availableCapacity}% open</strong>
+            <p>{averageLoad}% average scoped workload across {team.length} members.</p>
+          </article>
+        </div>
+        <div className="workspace-lanes">
+          {projects.slice(0, 3).map((project) => (
+            <article className="workspace-lane" key={project.id}>
+              <div>
+                <span>{project.id}</span>
+                <strong>{project.name}</strong>
+              </div>
+              <div className="progress-bar">
+                <span style={{ width: `${project.progress}%` }} />
+              </div>
+              <em>{project.progress}%</em>
+            </article>
+          ))}
         </div>
       </section>
 
@@ -870,10 +1303,10 @@ function IssuesView({
     : issues.length;
 
   useEffect(() => {
-    if (draftPrefill || highlightedTarget === "create_ticket_button") {
+    if (draftPrefill) {
       setIsCreating(true);
     }
-  }, [draftPrefill, highlightedTarget]);
+  }, [draftPrefill]);
 
   return (
     <div className="surface-stack">
@@ -1240,11 +1673,15 @@ function IssueDetailView({
 function ProjectsView({
   createProject,
   highlightedTarget,
-  projects
+  projects,
+  team,
+  workspaceScope
 }: {
   createProject: (project: DemoProject) => void;
   highlightedTarget?: string;
   projects: DemoProject[];
+  team: DemoTeamMember[];
+  workspaceScope: DemoWorkspaceScope;
 }) {
   const [isCreating, setIsCreating] = useState(false);
 
@@ -1253,8 +1690,8 @@ function ProjectsView({
       <section className="panel">
         <div className="panel-header">
           <div>
-            <p className="section-kicker">Roadmap</p>
-            <h2>Active projects</h2>
+            <p className="section-kicker">Scoped Roadmap</p>
+            <h2>{workspaceScope.name}</h2>
           </div>
           <div className="panel-actions">
             <button
@@ -1280,13 +1717,20 @@ function ProjectsView({
               createProject(project);
               setIsCreating(false);
             }}
+            members={team}
             projects={projects}
           />
         )}
 
-        <div className="project-list">
-          {projects.map((project) => (
-            <article className="project-row" key={project.id || project.name}>
+        {projects.length === 0 ? (
+          <div className="empty-panel" data-testid="projects-empty-state">
+            <strong>No scoped projects yet</strong>
+            <p>Create a project to give this workspace its own roadmap, lead, target date, and progress signal.</p>
+          </div>
+        ) : (
+          <div className="project-list">
+            {projects.map((project) => (
+              <article className="project-row" key={project.id || project.name}>
               <div>
                 <div className="project-header-line">
                   <h3>{project.name}</h3>
@@ -1307,9 +1751,10 @@ function ProjectsView({
                 </div>
                 <strong>{project.progress}%</strong>
               </div>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1318,19 +1763,21 @@ function ProjectsView({
 function ProjectCreatePanel({
   onCancel,
   onCreate,
-  projects
+  projects,
+  members
 }: {
   onCancel: () => void;
   onCreate: (project: DemoProject) => void;
   projects: DemoProject[];
+  members: DemoTeamMember[];
 }) {
   const [name, setName] = useState("Design System V2");
   const [description, setDescription] = useState(
     "Standardize dynamic tokens, accessible dark mode components, and responsive grid patterns across the product."
   );
   const [status, setStatus] = useState<DemoProject["status"]>("Active");
-  const [lead, setLead] = useState(demoTeam[0]?.name ?? "Maya Chen");
-  const [team, setTeam] = useState("Product Engineering");
+  const [lead, setLead] = useState(members[0]?.name ?? "Maya Chen");
+  const [teamName, setTeamName] = useState("Product Engineering");
   const [targetDate, setTargetDate] = useState("2026-11-15");
   const [progress, setProgress] = useState(25);
 
@@ -1354,7 +1801,7 @@ function ProjectCreatePanel({
       progress,
       status,
       lead,
-      team,
+      team: teamName,
       targetDate
     });
   }
@@ -1397,7 +1844,7 @@ function ProjectCreatePanel({
         <label className="field">
           <span>Lead</span>
           <select onChange={(event) => setLead(event.target.value)} value={lead}>
-            {demoTeam.map((member) => (
+            {members.map((member) => (
               <option key={member.name} value={member.name}>
                 {member.name}
               </option>
@@ -1415,7 +1862,7 @@ function ProjectCreatePanel({
         </label>
         <label className="field">
           <span>Team</span>
-          <select onChange={(event) => setTeam(event.target.value)} value={team}>
+          <select onChange={(event) => setTeamName(event.target.value)} value={teamName}>
             <option value="Product Engineering">Product Engineering</option>
             <option value="Platform">Platform</option>
             <option value="Design">Design</option>
@@ -1447,11 +1894,13 @@ function ProjectCreatePanel({
 function CyclesView({
   createCycle,
   cycles,
-  highlightedTarget
+  highlightedTarget,
+  workspaceScope
 }: {
   createCycle: (cycle: DemoCycle) => void;
   cycles: DemoCycle[];
   highlightedTarget?: string;
+  workspaceScope: DemoWorkspaceScope;
 }) {
   const [isCreating, setIsCreating] = useState(false);
 
@@ -1460,8 +1909,8 @@ function CyclesView({
       <section className="panel">
         <div className="panel-header">
           <div>
-            <p className="section-kicker">Sprint Planning</p>
-            <h2>Cycles</h2>
+            <p className="section-kicker">Scoped Sprint Planning</p>
+            <h2>{workspaceScope.name} cycles</h2>
           </div>
           <div className="panel-actions">
             <button
@@ -1491,9 +1940,15 @@ function CyclesView({
           />
         )}
 
-        <div className="cycles-stack">
-          {cycles.map((cycle) => (
-            <article className="cycle-card-item" key={cycle.id || cycle.name}>
+        {cycles.length === 0 ? (
+          <div className="empty-panel" data-testid="cycles-empty-state">
+            <strong>No scoped cycles yet</strong>
+            <p>Create a cycle to plan the next delivery window for this workspace.</p>
+          </div>
+        ) : (
+          <div className="cycles-stack">
+            {cycles.map((cycle) => (
+              <article className="cycle-card-item" key={cycle.id || cycle.name}>
               <div className="cycle-card-top">
                 <div>
                   <div className="cycle-title-group">
@@ -1503,7 +1958,7 @@ function CyclesView({
                     </span>
                   </div>
                   <p className="cycle-meta-text">
-                    {cycle.startDate} to {cycle.endDate} • <strong>{cycle.daysLeft} days left</strong>
+                    {cycle.startDate} to {cycle.endDate} - <strong>{cycle.daysLeft} days left</strong>
                   </p>
                 </div>
                 <span className="quiet-badge">{cycle.team}</span>
@@ -1517,9 +1972,10 @@ function CyclesView({
                   ))}
                 </div>
               </div>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1695,12 +2151,14 @@ function TeamsView({
   createTeamMember,
   draftPrefill,
   highlightedTarget,
-  team
+  team,
+  workspaceScope
 }: {
   createTeamMember: (member: DemoTeamMember) => void;
   draftPrefill?: DraftPrefill["teamMember"];
   highlightedTarget?: string;
   team: DemoTeamMember[];
+  workspaceScope: DemoWorkspaceScope;
 }) {
   const [isCreating, setIsCreating] = useState(
     highlightedTarget === "add_member_button" || Boolean(draftPrefill)
@@ -1717,8 +2175,8 @@ function TeamsView({
       <section className="panel">
         <div className="panel-header">
           <div>
-            <p className="section-kicker">Team</p>
-            <h2>Engineering capacity</h2>
+            <p className="section-kicker">Scoped Team</p>
+            <h2>{workspaceScope.name} capacity</h2>
           </div>
           <div className="panel-actions">
             <button
@@ -1748,9 +2206,15 @@ function TeamsView({
             prefill={draftPrefill}
           />
         )}
-        <div className="team-grid">
-          {team.map((member) => (
-            <article className="member-card" key={member.name}>
+        {team.length === 0 ? (
+          <div className="empty-panel" data-testid="team-empty-state">
+            <strong>No scoped members yet</strong>
+            <p>Add a team member before assigning tickets or creating capacity plans in this workspace.</p>
+          </div>
+        ) : (
+          <div className="team-grid">
+            {team.map((member) => (
+              <article className="member-card" key={member.name}>
               <div className="avatar">{member.initials}</div>
               <div>
                 <h3>{member.name}</h3>
@@ -1758,9 +2222,10 @@ function TeamsView({
                 {member.email && <p>{member.email}</p>}
               </div>
               <strong>{member.load}%</strong>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1883,6 +2348,12 @@ function IntegrationsView({ highlightedTarget }: { highlightedTarget?: string })
   const showGithubSetup = highlightedTarget === "github_setup";
   const highlightGithub = showGithubSetup || highlightedTarget === "github_card";
   const highlightSlack = highlightedTarget === "slack_card";
+  const githubHealth = [
+    ["Connection", "Connected"],
+    ["Repositories", "3 selected"],
+    ["PR sync", "Every 5 minutes"],
+    ["Last event", "2 minutes ago"]
+  ];
 
   return (
     <div className="surface-stack">
@@ -1925,11 +2396,43 @@ function IntegrationsView({ highlightedTarget }: { highlightedTarget?: string })
         </div>
         {showGithubSetup && (
           <div className="setup-panel" data-testid="github-setup-panel">
-            <p className="section-kicker">GitHub Setup</p>
+            <div className="setup-header">
+              <div>
+                <p className="section-kicker">GitHub Setup</p>
+                <h3>Repository activity is mapped into scoped Pixel work.</h3>
+              </div>
+              <span className="connected">Demo connected</span>
+            </div>
+            <div className="github-health-grid">
+              {githubHealth.map(([label, value]) => (
+                <div key={label}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="github-setup-grid">
+              <article>
+                <span>Selected repositories</span>
+                <strong>pixel/web, pixel/api, pixel/integrations</strong>
+                <p>Only repositories mapped to the active workspace appear in this demo.</p>
+              </article>
+              <article>
+                <span>Automation rules</span>
+                <strong>PR mentions attach to tickets</strong>
+                <p>Commits, pull requests, branch names, and review status become ticket context.</p>
+              </article>
+              <article>
+                <span>Recent sync</span>
+                <strong>PR #184 linked to PIX-143</strong>
+                <p>Edith can explain the link and open the related work without leaving Pixel.</p>
+              </article>
+            </div>
             <div className="setup-steps">
               <span>Authorize workspace</span>
               <span>Select repositories</span>
-              <span>Sync PR activity</span>
+              <span>Map branches to projects</span>
+              <span>Sync PR and commit activity</span>
             </div>
           </div>
         )}
@@ -1948,6 +2451,20 @@ function Metric({ label, value, delta }: { label: string; value: string; delta: 
   );
 }
 
+function ActivityPopup({ event, onDismiss }: { event: UiEvent; onDismiss: () => void }) {
+  return (
+    <aside className={`activity-popup ${event.status}`} data-testid="activity-popup" role="status">
+      <div>
+        <span>{event.status === "executed" ? "Workspace updated" : "Action blocked"}</span>
+        <strong>{event.description}</strong>
+      </div>
+      <button aria-label="Dismiss activity update" onClick={onDismiss} type="button">
+        x
+      </button>
+    </aside>
+  );
+}
+
 function IssueList({
   assigneeFilter,
   issues,
@@ -1963,6 +2480,18 @@ function IssueList({
     ? issues.filter((issue) => issue.assignee === assigneeFilter)
     : issues;
   const visibleIssues = typeof limit === "number" ? filteredIssues.slice(0, limit) : filteredIssues;
+
+  if (visibleIssues.length === 0) {
+    return (
+      <div className="empty-panel" data-testid="issues-empty-state">
+        <strong>No scoped tickets found</strong>
+        <p>
+          This workspace has no tickets matching the current view. Create a ticket or clear the
+          assignee filter to continue the demo.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="issue-list">
@@ -2240,6 +2769,7 @@ function DiagnosticsPanel({
 }
 
 function ConversationCard({
+  demoPathPrompts,
   demoPrompts,
   isSending,
   messages,
@@ -2248,6 +2778,7 @@ function ConversationCard({
   onSend,
   turnStatus
 }: {
+  demoPathPrompts: string[];
   demoPrompts: string[];
   isSending: boolean;
   messages: TranscriptMessage[];
@@ -2258,7 +2789,7 @@ function ConversationCard({
 }) {
   const [draft, setDraft] = useState("");
   const [voiceEngineStatus, setVoiceEngineStatus] = useState<VoiceEngineStatus>("Idle");
-  const [voiceEngineMode, setVoiceEngineMode] = useState<VoiceEngineMode>("gemini");
+  const [voiceEngineMode, setVoiceEngineMode] = useState<VoiceEngineMode>("azure");
   const [spectrum, setSpectrum] = useState<SpectrumData>([15, 20, 15, 18, 12]);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -2294,7 +2825,11 @@ function ConversationCard({
     const engine = new HybridVoiceEngine({
       onStatusChange: (status, mode) => {
         setVoiceEngineStatus(status);
-        setVoiceEngineMode(mode);
+        setVoiceEngineMode((currentMode) => {
+          if (mode !== "local") return mode;
+          if (status === "Speaking" || status === "Error") return "local";
+          return currentMode === "local" ? "azure" : currentMode;
+        });
         if (status !== "Error") {
           setVoiceError("");
         }
@@ -2363,6 +2898,7 @@ function ConversationCard({
     });
 
     voiceEngineRef.current = engine;
+    engine.prewarmSpeech(prewarmedVoiceLines);
 
     // Speak initial introduction greeting on visit.
     // Browser autoplay policy blocks speechSynthesis until user interacts,
@@ -2442,7 +2978,7 @@ function ConversationCard({
     voiceEngineRef.current?.cancelSpeech();
     void (async () => {
       const result = await onSend(message, "text");
-      if (result?.speech && isTTSEnabledRef.current) {
+      if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
         voiceEngineRef.current?.speakOnly(result.speech);
       }
     })();
@@ -2462,7 +2998,7 @@ function ConversationCard({
 
       setVoiceError("");
       setVoiceEngineStatus("Listening");
-      setVoiceEngineMode("local");
+      setVoiceEngineMode("azure");
       return;
     }
 
@@ -2513,11 +3049,7 @@ function ConversationCard({
             <h2>Edith</h2>
           </div>
           <span className={`voice-mode-badge ${voiceEngineMode}`}>
-            {voiceEngineMode === "gemini"
-              ? "Gemini Voice"
-              : voiceEngineMode === "webrtc"
-                ? "OpenAI WebRTC"
-                : "Enhanced Voice"}
+            {voiceModeLabel(voiceEngineMode)}
           </span>
         </div>
       </div>
@@ -2540,6 +3072,35 @@ function ConversationCard({
         )}
       </div>
 
+      <div className="demo-path" data-testid="demo-path" aria-label="Guided demo path">
+        <div className="demo-path-header">
+          <span>Guided demo path</span>
+          <strong>{demoPathPrompts.length} steps</strong>
+        </div>
+        <div className="demo-path-list">
+          {demoPathPrompts.map((prompt, index) => (
+            <button
+              data-testid={`demo-path-${index + 1}`}
+              key={prompt}
+              onClick={() => {
+                setLiveTranscript("");
+                voiceEngineRef.current?.cancelSpeech();
+                void (async () => {
+                  const result = await onSend(prompt, "text");
+                  if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
+                    voiceEngineRef.current?.speakOnly(result.speech);
+                  }
+                })();
+              }}
+              type="button"
+            >
+              <span>{index + 1}</span>
+              {prompt}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="demo-prompt-strip" aria-label="Suggested demo turns">
         {demoPrompts.map((prompt) => (
           <button
@@ -2550,7 +3111,7 @@ function ConversationCard({
               voiceEngineRef.current?.cancelSpeech();
               void (async () => {
                 const result = await onSend(prompt, "text");
-                if (result?.speech && isTTSEnabledRef.current) {
+                if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
                   voiceEngineRef.current?.speakOnly(result.speech);
                 }
               })();
@@ -2587,7 +3148,7 @@ function ConversationCard({
             type="button"
           >
             <span className={`voice-dot ${voiceEngineStatus.toLowerCase()}`} />
-            {isVoiceActive ? "End Voice" : "Start Realtime Voice"}
+            {isVoiceActive ? "End Voice" : "Start Microsoft Voice"}
           </button>
 
           <button
@@ -2604,13 +3165,13 @@ function ConversationCard({
             title={isTTSEnabled ? "Mute agent voice" : "Unmute agent voice"}
             type="button"
           >
-            {isTTSEnabled ? "🔊 Voice On" : "🔇 Voice Off"}
+            {isTTSEnabled ? "Voice On" : "Voice Off"}
           </button>
         </div>
 
         <div className="voice-status-line">
           <span className="voice-status-label" data-testid="voice-status">
-            Voice: <strong>{voiceEngineStatus}</strong>
+            Voice: <strong>{voiceStatusLabel(voiceEngineStatus)}</strong>
           </span>
 
           {/* 5-Bar Audio Equalizer Spectrum Visualizer */}
@@ -2657,9 +3218,61 @@ function shouldDisableAutoGreetingSpeech(): boolean {
   );
 }
 
+function shouldDisableTextResponseSpeech(): boolean {
+  return (
+    typeof window !== "undefined"
+    && (window as SpeechRecognitionWindow).__disableTextResponseSpeech === true
+  );
+}
+
+function savedWorkspaceEvent(
+  event: UiEvent,
+  workspaceName: string,
+  action: DemoAction,
+  issues: DemoIssue[]
+): UiEvent {
+  if (event.status !== "executed") return event;
+
+  if (action.type === "CREATE_DEMO_ISSUE") {
+    return {
+      ...event,
+      description: `Saved to ${workspaceName}: created ${action.payload.id} for ${action.payload.assignee}.`
+    };
+  }
+
+  if (action.type === "UPDATE_DEMO_ISSUE") {
+    const issue = issues.find((item) => item.id === action.payload.issue_id);
+    return {
+      ...event,
+      description: issue
+        ? `Saved to ${workspaceName}: updated issue ${issue.id} (${issue.assignee}, ${issue.priority}, ${issue.status}).`
+        : `Saved to ${workspaceName}: updated issue ${action.payload.issue_id}.`
+    };
+  }
+
+  return event;
+}
+
+function voiceModeLabel(mode: VoiceEngineMode): string {
+  if (mode === "azure") return "Microsoft Voice";
+  if (mode === "connecting") return "Microsoft Voice";
+  if (mode === "gemini") return "Cloud Voice";
+  if (mode === "webrtc") return "Realtime Voice";
+  if (mode === "local") return "Browser Voice";
+  return "Microsoft Voice";
+}
+
+function voiceStatusLabel(status: VoiceEngineStatus): string {
+  if (status === "Idle") return "Ready";
+  if (status === "Preparing") return "Preparing voice";
+  if (status === "Error") return "Unavailable";
+  return status;
+}
+
 function voiceControlTitle(status: VoiceStatus): string {
   if (status === "Listening") return "Stop listening";
   if (status === "Speaking") return "Stop agent voice";
+  if (status === "Preparing") return "Preparing voice";
   if (status === "Processing") return "Processing voice input";
   return "Start voice input";
 }
@@ -2671,6 +3284,89 @@ function upsertIssue(issues: DemoIssue[], issue: DemoIssue): DemoIssue[] {
   }
 
   return issues.map((item, index) => (index === existingIssueIndex ? issue : item));
+}
+
+function applyIssueUpdate(
+  issues: DemoIssue[],
+  update: {
+    issue_id: string;
+    assignee?: string;
+    priority?: DemoIssue["priority"];
+    status?: string;
+  }
+): DemoIssue[] {
+  return issues.map((issue) =>
+    issue.id === update.issue_id
+      ? {
+          ...issue,
+          assignee: update.assignee ?? issue.assignee,
+          priority: update.priority ?? issue.priority,
+          status: update.status ?? issue.status
+        }
+      : issue
+  );
+}
+
+function filterIssuesByScope(
+  issues: DemoIssue[],
+  workspaceScope: DemoWorkspaceScope
+): DemoIssue[] {
+  return issues.filter((issue) => isIssueInScope(issue, workspaceScope));
+}
+
+function filterTeamByScope(
+  team: DemoTeamMember[],
+  workspaceScope: DemoWorkspaceScope,
+  scopedIssues: DemoIssue[]
+): DemoTeamMember[] {
+  const scopedAssignees = new Set(scopedIssues.map((issue) => issue.assignee));
+  return team.filter((member) => {
+    const projectIds = member.projectIds ?? [];
+    return (
+      projectIds.some((projectId) => workspaceScope.allowedProjectIds.includes(projectId))
+      || scopedAssignees.has(member.name)
+    );
+  });
+}
+
+function isIssueInScope(issue: DemoIssue, workspaceScope: DemoWorkspaceScope): boolean {
+  if (issue.projectId && workspaceScope.allowedProjectIds.includes(issue.projectId)) {
+    return true;
+  }
+
+  return workspaceScope.allowedIssueProjects.includes(issue.project);
+}
+
+function isCycleInScope(cycle: DemoCycle, workspaceScope: DemoWorkspaceScope): boolean {
+  return !cycle.projectId || workspaceScope.allowedProjectIds.includes(cycle.projectId);
+}
+
+function withScopedIssue(
+  issue: DemoIssue,
+  scopedProjects: DemoProject[],
+  workspaceScope: DemoWorkspaceScope
+): DemoIssue {
+  const matchingProject = scopedProjects.find((project) => project.name === issue.project);
+  return {
+    ...issue,
+    projectId: issue.projectId ?? matchingProject?.id ?? workspaceScope.allowedProjectIds[0],
+    project: issue.project || workspaceScope.allowedIssueProjects[0]
+  };
+}
+
+function addProjectToScope(
+  workspaceScope: DemoWorkspaceScope,
+  project: DemoProject
+): DemoWorkspaceScope {
+  return {
+    ...workspaceScope,
+    allowedProjectIds: workspaceScope.allowedProjectIds.includes(project.id)
+      ? workspaceScope.allowedProjectIds
+      : [...workspaceScope.allowedProjectIds, project.id],
+    allowedIssueProjects: workspaceScope.allowedIssueProjects.includes(project.name)
+      ? workspaceScope.allowedIssueProjects
+      : [...workspaceScope.allowedIssueProjects, project.name]
+  };
 }
 
 function findTeamMember(team: DemoTeamMember[], name: string): DemoTeamMember | undefined {
@@ -2700,6 +3396,101 @@ function asksCapabilities(text: string): boolean {
   return /\b(are you capable|what can you do|what are you able|what can this do|can you do)\b/.test(text);
 }
 
+function asksForNextStep(text: string): boolean {
+  return /\b(what next|next step|what should i try|what should we try|where should i go|guide me|walk me through)\b/.test(text);
+}
+
+function asksVagueCreateRequest(text: string): boolean {
+  return (
+    /\b(create|make|add|new)\b/.test(text)
+    && !/\b(it|this|that|priority|status|urgent|critical|high|medium|low|done|review|todo|backlog)\b/.test(text)
+    && !/\b(ticket|tickets|issue|issues|bug|bugs|project|projects|cycle|cycles|sprint|member|members|teammate|teammates|person|people)\b/.test(text)
+  );
+}
+
+function asksVagueAssignmentRequest(text: string): boolean {
+  return (
+    /\b(assign|reassign|owner|assignee)\b/.test(text)
+    && !/\b(to|for|maya|noah|avery|iris|lucifer)\b/.test(text)
+    && !/\b(how do i assign|how to assign|where.*assign|show assignment|issue assignment)\b/.test(text)
+  );
+}
+
+function asksBroadWorkspaceRequest(text: string): boolean {
+  return (
+    /\b(company|organization|org|other workspace|other project|another workspace|another team|all workspaces|every workspace|all teams|every team)\b/.test(text)
+    && /\b(project|projects|ticket|tickets|issue|issues|work|team|teams)\b/.test(text)
+  );
+}
+
+function nextStepSpeech(currentPage: DemoPage, workspaceName: string): string {
+  if (currentPage === "dashboard") {
+    return `A strong next move is sprint planning. Ask me to show planning, and I'll open the current cycle for ${workspaceName}.`;
+  }
+  if (currentPage === "issues" || currentPage === "issue_detail") {
+    return "Next, try a follow-up like assign it to Noah, make it high priority, or show all tickets for Maya.";
+  }
+  if (currentPage === "integrations") {
+    return "A good next step is GitHub. Ask me how GitHub works or tell me to set it up, and I'll show the repository workflow.";
+  }
+  if (currentPage === "teams") {
+    return "From here, add a team member or ask me to create a ticket for someone new. I'll keep the assignment inside this workspace.";
+  }
+  if (currentPage === "projects") {
+    return "Try creating a project or ask which projects are visible. I'll keep the roadmap scoped to this workspace.";
+  }
+  return "Try asking about tickets, planning, GitHub, or creating work. I'll move the workspace and explain what changed.";
+}
+
+function githubConversationActionFor(text: string): { speech: string; action: DemoAction } | null {
+  if (!/\b(github|pull request|pull requests|pr|prs|commit|commits|repository|repositories|repo|repos|branch|branches|webhook)\b/.test(text)) {
+    return null;
+  }
+
+  if (/\b(connect|setup|set up|configure|enable|install|add)\b/.test(text)) {
+    return {
+      speech: "I'll open the GitHub setup flow. This shows repository selection, branch mapping, PR sync, and how activity is attached to Pixel tickets.",
+      action: { type: "OPEN_GITHUB_SETUP" }
+    };
+  }
+
+  return {
+    speech: "GitHub keeps engineering activity connected to tickets. Pull requests, commits, branches, and reviews can appear beside the work they belong to. I'll show the GitHub integration.",
+    action: { type: "HIGHLIGHT_GITHUB_CARD" }
+  };
+}
+
+function asksTeamCount(text: string): boolean {
+  return /\b(how many|count|number of)\b/.test(text) && /\b(team members|members|people|teammates)\b/.test(text);
+}
+
+function asksProjectCount(text: string): boolean {
+  return /\b(how many|count|number of|what projects|which projects)\b/.test(text) && /\b(project|projects)\b/.test(text);
+}
+
+function mentionsScopedWork(message: string): boolean {
+  const text = normalizeText(message);
+  return /\b(ticket|tickets|issue|issues|bug|bugs|project|projects|work|assign|assigned|owner|what about)\b/.test(text);
+}
+
+function extractReferencedPersonName(message: string): string | undefined {
+  const possessive = message.match(/\b([a-zA-Z]+(?:\s+[a-zA-Z]+)?)'s\s+(?:ticket|issue|bug|work|project)/i);
+  if (possessive?.[1]) {
+    return titleCase(possessive[1]);
+  }
+
+  const direct = message.match(
+    /\b(?:for|assigned to|assign to|owner is|what about)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i
+  );
+  if (!direct?.[1]) return undefined;
+
+  return titleCase(
+    direct[1]
+      .replace(/\b(ticket|issue|bug|work|project|priority|status)\b/gi, "")
+      .trim()
+  );
+}
+
 function correctionActionFor(text: string): DemoAction | null {
   if (!/\b(no|not|instead|rather)\b/.test(text)) return null;
   if (/\b(issue|issues|ticket|tickets|bug|bugs)\b/.test(text)) return { type: "OPEN_ISSUES" };
@@ -2721,15 +3512,54 @@ function correctionSpeech(action: DemoAction): string {
   return "Got it. I'll switch views.";
 }
 
+function scopedPersonTicketActionFor(
+  message: string,
+  scopedIssues: DemoIssue[]
+): { speech: string; action: DemoAction } | null {
+  const text = normalizeText(message);
+  const isPersonFollowUp = /\bwhat about\b/.test(text);
+  if (!/\b(ticket|tickets|issue|issues|bug|bugs)\b/.test(text) && !isPersonFollowUp) return null;
+  if (asksForTicketCreation(text)) return null;
+  if (
+    /\b(how do i assign|how to assign|show assignment|issue assignment)\b/.test(text)
+    || (text.includes("where") && text.includes("assign"))
+  ) {
+    return null;
+  }
+
+  const personName = extractReferencedPersonName(message) ?? extractAssigneeName(message);
+  if (!personName) return null;
+
+  const matchingIssues = scopedIssues.filter((issue) =>
+    namesMatch(issue.assignee, personName)
+  );
+
+  if (matchingIssues.length === 0) return null;
+
+  const assignee = matchingIssues[0].assignee;
+  if (
+    isPersonFollowUp
+    || /\b(all|list|show)\b/.test(text) && /\b(tickets|issues|bugs)\b/.test(text)
+  ) {
+    return {
+      speech: `I found ${matchingIssues.length} ticket${matchingIssues.length === 1 ? "" : "s"} assigned to ${assignee}: ${formatNames(matchingIssues.map((issue) => issue.id))}. I'll show those issues.`,
+      action: { type: "FILTER_ISSUES_BY_ASSIGNEE", payload: { assignee } }
+    };
+  }
+
+  return {
+    speech: `I found ${matchingIssues[0].id}, assigned to ${assignee}. I'll open that ticket.`,
+    action: { type: "OPEN_DEMO_ISSUE", payload: { issue_id: matchingIssues[0].id } }
+  };
+}
+
 function parseIssueUpdateRequest(message: string): {
   assignee?: string;
   priority?: DemoIssue["priority"];
   status?: string;
 } | null {
   const text = normalizeText(message);
-  const asksForCreation =
-    /\b(create|make|add|raise|file)\b/.test(text) && /\b(ticket|issue|bug)\b/.test(text);
-  if (asksForCreation) {
+  if (asksForTicketCreation(text)) {
     return null;
   }
 
@@ -2801,12 +3631,7 @@ function resolveIssueForMessage(
   if (assigneeName) {
     const normalizedAssignee = normalizeText(assigneeName);
     const matchingIssue = issues.find((issue) => {
-      const issueAssignee = normalizeText(issue.assignee);
-      return (
-        issueAssignee === normalizedAssignee
-        || issueAssignee.split(" ").includes(normalizedAssignee)
-        || normalizedAssignee.split(" ").some((part) => issueAssignee.split(" ").includes(part))
-      );
+      return namesMatch(issue.assignee, normalizedAssignee);
     });
     if (matchingIssue) return matchingIssue;
   }
@@ -2816,6 +3641,16 @@ function resolveIssueForMessage(
   }
 
   return selectedIssueId ? issues.find((issue) => issue.id === selectedIssueId) : undefined;
+}
+
+function namesMatch(fullName: string, query: string): boolean {
+  const normalizedFullName = normalizeText(fullName);
+  const normalizedQuery = normalizeText(query);
+  return (
+    normalizedFullName === normalizedQuery
+    || normalizedFullName.split(" ").includes(normalizedQuery)
+    || normalizedQuery.split(" ").some((part) => normalizedFullName.split(" ").includes(part))
+  );
 }
 
 function describeIssueChanges(previousIssue: DemoIssue, updatedIssue: DemoIssue): string {
@@ -2836,19 +3671,43 @@ function lowercaseFirst(value: string): string {
   return value ? `${value.charAt(0).toLowerCase()}${value.slice(1)}` : value;
 }
 
+function formatNames(names: string[]): string {
+  if (names.length === 0) return "none";
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 function parseTicketDraftRequest(message: string): DraftPrefill["issue"] | null {
   const normalizedMessage = normalizeText(message);
-  const asksForCreation =
-    /\b(create|make|add|raise|file)\b/.test(normalizedMessage)
-    && /\b(ticket|issue|bug)\b/.test(normalizedMessage);
-
-  if (!asksForCreation) return null;
+  if (asksForTicketWorkflowQuestion(normalizedMessage)) return null;
+  if (!asksForTicketDraft(normalizedMessage)) return null;
 
   return {
     assignee: extractAssigneeName(message),
     priority: extractPriority(normalizedMessage),
     title: extractIssueTitle(message)
   };
+}
+
+function asksForTicketCreation(text: string): boolean {
+  const mentionsWorkItem = /\b(ticket|issue|bug)\b/.test(text);
+  if (!mentionsWorkItem) return false;
+  return (
+    /\b(create|make|add|raise|file)\b/.test(text)
+    || /\b(open|start|draft)\b/.test(text) && /\b(new|fresh)\b/.test(text)
+  );
+}
+
+function asksForTicketDraft(text: string): boolean {
+  return /\b(create|make|add|raise|file)\b/.test(text) && /\b(ticket|issue|bug)\b/.test(text);
+}
+
+function asksForTicketWorkflowQuestion(text: string): boolean {
+  return (
+    /\b(where|how|best way|show me how|show how)\b/.test(text)
+    && /\b(create|make|add|raise|file)\b/.test(text)
+    && /\b(ticket|issue|bug)\b/.test(text)
+  );
 }
 
 function extractAssigneeName(message: string): string | undefined {

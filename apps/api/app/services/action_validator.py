@@ -4,11 +4,22 @@ from typing import Any
 
 from app.product_config import PRODUCTS_BY_ID
 from app.schemas import ProposedAction, ValidatedAction
-from app.services.demo_data import issue_exists, load_demo_issues
+from app.services.demo_data import (
+    assignee_in_scope,
+    issue_id_in_scope,
+    load_demo_issues,
+    team_member_in_scope,
+)
+from app.workspace_config import DEFAULT_WORKSPACE_SCOPE_ID, WORKSPACE_SCOPES_BY_ID, WorkspaceScope
 
 
 class ActionValidator:
-    def validate(self, product_id: str, proposed_action: ProposedAction | None) -> ValidatedAction | None:
+    def validate(
+        self,
+        product_id: str,
+        proposed_action: ProposedAction | None,
+        workspace_scope_id: str = DEFAULT_WORKSPACE_SCOPE_ID,
+    ) -> ValidatedAction | None:
         if proposed_action is None:
             return None
 
@@ -19,13 +30,22 @@ class ActionValidator:
         if proposed_action.type not in product.allowed_actions:
             return None
 
-        payload = self._safe_payload(proposed_action.type, proposed_action.payload)
+        workspace_scope = WORKSPACE_SCOPES_BY_ID.get(workspace_scope_id)
+        if workspace_scope is None:
+            return None
+
+        payload = self._safe_payload(proposed_action.type, proposed_action.payload, workspace_scope)
         if payload is None:
             return None
 
         return ValidatedAction(type=proposed_action.type, payload=payload)
 
-    def _safe_payload(self, action_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _safe_payload(
+        self,
+        action_type: str,
+        payload: dict[str, Any],
+        workspace_scope: WorkspaceScope,
+    ) -> dict[str, Any] | None:
         if action_type in {
             "OPEN_DASHBOARD",
             "OPEN_ISSUES",
@@ -50,21 +70,34 @@ class ActionValidator:
             return None
 
         if action_type == "CREATE_DEMO_ISSUE":
-            return self._safe_demo_issue_payload(payload)
+            return self._safe_demo_issue_payload(payload, workspace_scope)
 
         if action_type == "UPDATE_DEMO_ISSUE":
-            return self._safe_issue_update_payload(payload)
+            return self._safe_issue_update_payload(payload, workspace_scope)
 
         if action_type == "OPEN_DEMO_ISSUE":
             issue_id = payload.get("issue_id")
-            if isinstance(issue_id, str) and issue_exists(issue_id):
+            if (
+                isinstance(issue_id, str)
+                and issue_id_in_scope(
+                    issue_id,
+                    set(workspace_scope.allowed_project_ids),
+                    set(workspace_scope.allowed_issue_projects),
+                )
+            ):
                 return {"issue_id": issue_id}
             return None
 
         if action_type == "FILTER_ISSUES_BY_ASSIGNEE":
             assignee = payload.get("assignee")
-            assignees = {issue.assignee for issue in load_demo_issues()}
-            if isinstance(assignee, str) and assignee in assignees:
+            if (
+                isinstance(assignee, str)
+                and assignee_in_scope(
+                    assignee,
+                    set(workspace_scope.allowed_project_ids),
+                    set(workspace_scope.allowed_issue_projects),
+                )
+            ):
                 return {"assignee": assignee}
             return None
 
@@ -72,18 +105,30 @@ class ActionValidator:
             issue_id = payload.get("issue_id")
             if issue_id is None:
                 return {}
-            if isinstance(issue_id, str) and issue_exists(issue_id):
+            if (
+                isinstance(issue_id, str)
+                and issue_id_in_scope(
+                    issue_id,
+                    set(workspace_scope.allowed_project_ids),
+                    set(workspace_scope.allowed_issue_projects),
+                )
+            ):
                 return {"issue_id": issue_id}
             return None
 
         return None
 
-    def _safe_demo_issue_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _safe_demo_issue_payload(
+        self,
+        payload: dict[str, Any],
+        workspace_scope: WorkspaceScope,
+    ) -> dict[str, Any] | None:
         issue_id = payload.get("id")
         title = payload.get("title")
         priority = payload.get("priority")
         assignee = payload.get("assignee")
         project = payload.get("project")
+        project_id = payload.get("projectId")
         status = payload.get("status")
 
         if not (
@@ -100,28 +145,59 @@ class ActionValidator:
         ):
             return None
 
+        if isinstance(project_id, str) and project_id not in workspace_scope.allowed_project_ids:
+            return None
+        if not isinstance(project_id, str) and project not in workspace_scope.allowed_issue_projects:
+            return None
+        allowed_project_ids = set(workspace_scope.allowed_project_ids)
+        if assignee not in workspace_scope.allowed_team_members and not team_member_in_scope(
+            assignee,
+            allowed_project_ids,
+        ):
+            return None
+
         return {
             "id": issue_id,
             "title": title,
             "priority": priority,
             "assignee": assignee,
             "project": project,
+            **({"projectId": project_id} if isinstance(project_id, str) else {}),
             "status": status,
         }
 
-    def _safe_issue_update_payload(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _safe_issue_update_payload(
+        self,
+        payload: dict[str, Any],
+        workspace_scope: WorkspaceScope,
+    ) -> dict[str, Any] | None:
         issue_id = payload.get("issue_id")
-        if not (isinstance(issue_id, str) and issue_exists(issue_id)):
+        if not (
+            isinstance(issue_id, str)
+            and issue_id_in_scope(
+                issue_id,
+                set(workspace_scope.allowed_project_ids),
+                set(workspace_scope.allowed_issue_projects),
+            )
+        ):
             return None
 
         safe_payload: dict[str, Any] = {"issue_id": issue_id}
         assignee = payload.get("assignee")
         priority = payload.get("priority")
         status = payload.get("status")
+        allowed_project_ids = set(workspace_scope.allowed_project_ids)
         known_assignees = {issue.assignee for issue in load_demo_issues()}
 
         if assignee is not None:
-            if not (isinstance(assignee, str) and assignee in known_assignees):
+            if not (
+                isinstance(assignee, str)
+                and (assignee in known_assignees or team_member_in_scope(assignee, allowed_project_ids))
+                and (
+                    assignee in workspace_scope.allowed_team_members
+                    or team_member_in_scope(assignee, allowed_project_ids)
+                )
+            ):
                 return None
             safe_payload["assignee"] = assignee
 

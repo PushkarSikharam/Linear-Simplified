@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.workspace_config import DEFAULT_WORKSPACE_SCOPE_ID
+
 
 AllowedActionType = Literal[
     "OPEN_DASHBOARD",
@@ -36,6 +38,7 @@ class TurnRequest(BaseModel):
     input_mode: Literal["text", "voice"] = "text"
     current_page: str | None = None
     selected_issue_id: str | None = None
+    workspace_scope_id: str = DEFAULT_WORKSPACE_SCOPE_ID
 
     @field_validator("message")
     @classmethod

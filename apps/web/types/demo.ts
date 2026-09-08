@@ -36,6 +36,7 @@ export type DemoTeamMember = {
   role: string;
   load: number;
   email?: string;
+  projectIds?: string[];
 };
 
 export type DemoIssue = {
@@ -44,6 +45,7 @@ export type DemoIssue = {
   priority: "Low" | "Medium" | "High";
   assignee: string;
   project: string;
+  projectId?: string;
   status: string;
   cycle?: string;
   estimate?: string;
@@ -65,6 +67,7 @@ export type DemoProject = {
 export type DemoCycle = {
   id: string;
   name: string;
+  projectId?: string;
   daysLeft: number;
   progress: number;
   completed: number;
@@ -75,6 +78,22 @@ export type DemoCycle = {
   team: string;
   startDate: string;
   endDate: string;
+};
+
+export type DemoWorkspaceScope = {
+  id: string;
+  name: string;
+  description: string;
+  allowedProjectIds: string[];
+  allowedIssueProjects: string[];
+};
+
+export type DemoDataResponse = {
+  workspaceScopes: DemoWorkspaceScope[];
+  projects: DemoProject[];
+  team: DemoTeamMember[];
+  cycles: DemoCycle[];
+  issues: DemoIssue[];
 };
 
 export type DemoActionType =
