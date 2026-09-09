@@ -61,6 +61,10 @@ class ProductRetriever:
     def _query_terms(self, query: str) -> set[str]:
         terms = set(re.findall(r"[a-z0-9-]+", normalize_for_intent(query)))
         expanded = set(terms)
+        if {"week", "weekly", "week-by-week"} & terms and {"plan", "planning", "work", "focus"} & terms:
+            expanded.add("__cycles_intent__")
+            expanded.add("cycles")
+            expanded.update(FEATURE_KEYWORDS["cycles"])
         for feature, keywords in FEATURE_KEYWORDS.items():
             if terms & keywords:
                 expanded.add(feature)
@@ -69,7 +73,13 @@ class ProductRetriever:
 
     def _score(self, source: str, title: str, snippet: str, query_terms: set[str]) -> int:
         doc_terms = set(re.findall(r"[a-z0-9-]+", f"{source} {title} {snippet}".lower()))
-        return len(query_terms & doc_terms)
+        score = len(query_terms & doc_terms)
+        for feature in FEATURE_KEYWORDS:
+            if feature in query_terms and source.startswith(feature):
+                score += 3
+        if "__cycles_intent__" in query_terms and source.startswith("cycles"):
+            score += 8
+        return score
 
     @lru_cache(maxsize=32)
     def _load_doc(self, doc_path: Path) -> RetrievedDocument:

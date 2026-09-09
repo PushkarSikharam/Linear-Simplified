@@ -133,7 +133,15 @@ class IntentExtractor:
         return signals
 
     def _mentions_cycle(self, text: str) -> bool:
-        return any(term in text for term in ("sprint", "cycle", "planning", "burndown"))
+        if any(term in text for term in ("sprint", "cycle", "planning", "burndown")):
+            return True
+        return bool(
+            (
+                re.search(r"\bplan(?:s|ned)?\b", text)
+                or "what to focus on" in text
+            )
+            and any(term in text for term in ("work", "week", "weekly", "focus"))
+        )
 
     def _mentions_issue(self, text: str) -> bool:
         return any(term in text for term in ("bug", "issue", "ticket", "triage", "assign"))

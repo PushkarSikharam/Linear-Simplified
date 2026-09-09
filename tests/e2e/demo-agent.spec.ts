@@ -12,6 +12,7 @@ declare global {
     __disableAutoGreetingSpeech?: boolean;
     __disableTextResponseSpeech?: boolean;
     __emitVoiceTranscript?: (transcript: string) => void;
+    __spokenAgentReplies?: string[];
   }
 }
 
@@ -716,6 +717,76 @@ test("handles voice typo input and voice-only demo issue creation", async ({ pag
   await expect(page.getByTestId("selected-issue-id")).toContainText(/^PIX-\d+$/);
   await expect(page.getByTestId("transcript")).toContainText("I created PIX-");
   await expect(page.getByTestId("current-view-title")).toHaveText("Issue Detail");
+});
+
+test("speaks assistant replies after voice input", async ({ page }) => {
+  await installMockVoice(page);
+  await openApp(page);
+
+  await page.getByTestId("voice-toggle").click();
+  await page.evaluate(() => window.__emitVoiceTranscript?.("show sprint planning"));
+
+  await expect(page.getByTestId("current-view-title")).toHaveText("Cycles");
+  await expect
+    .poll(async () => page.evaluate(() => window.__spokenAgentReplies ?? []))
+    .toContainEqual(expect.stringContaining("I'll show you the current cycle"));
+});
+
+test("answers identity questions without generic routing", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "Hii there who are u");
+
+  await expect(page.getByTestId("transcript")).toContainText(
+    "I'm Edith, Pixel's live demo guide."
+  );
+});
+
+test("handles greetings, capabilities, and visitor introduction naturally", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "Hii There?");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "Hi there. What would you like to explore first in Pixel?"
+  );
+
+  await sendChat(page, "What are you capable of doing?");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "I can guide this Pixel demo through Product Engineering Workspace"
+  );
+
+  await sendChat(page, "HI there i am Pushkar!");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "Nice to meet you, Pushkar."
+  );
+
+  await sendChat(page, "Hi");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "Hi Pushkar. What would you like to explore next in Pixel?"
+  );
+});
+
+test("does not treat mixed create-and-assign phrasing as old ticket lookup", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "open a ticket for Maya and assign to Jen");
+
+  await expect(page.getByTestId("current-view-title")).toHaveText("Teams");
+  await expect(page.getByTestId("team-member-create-panel")).toBeVisible();
+  await expect(page.getByTestId("member-name-input")).toHaveValue("Jen");
+  await expect(page.getByTestId("transcript")).toContainText(
+    "Jen is not in the team directory yet"
+  );
+});
+
+test("opens add-member flow from natural member creation phrasing", async ({ page }) => {
+  await openApp(page);
+
+  await sendChat(page, "can you add a new member Lucife");
+
+  await expect(page.getByTestId("current-view-title")).toHaveText("Teams");
+  await expect(page.getByTestId("team-member-create-panel")).toBeVisible();
+  await expect(page.getByTestId("member-name-input")).toHaveValue("Lucife");
 });
 
 test("turns agent speech into listening when the user presses voice", async ({ page }) => {

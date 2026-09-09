@@ -3,9 +3,18 @@ from __future__ import annotations
 import re
 
 from app.product_config import PRODUCTS_BY_ID
-from app.schemas import IntentTrace, RetrievedContext, SessionSummary, Signal, TurnRequest, TurnResponse
+from app.schemas import (
+    IntentTrace,
+    ProposedAction,
+    RetrievedContext,
+    SessionSummary,
+    Signal,
+    TurnRequest,
+    TurnResponse,
+)
 from app.services.action_planner import ActionPlanner
 from app.services.action_validator import ActionValidator
+from app.services.agent_reasoner import AgentReasoner, AgentReasoningContext, AgentReasoningResult
 from app.services.conversation_manager import ConversationManager
 from app.services.demo_data import (
     extract_unknown_person,
@@ -15,6 +24,7 @@ from app.services.demo_data import (
     find_issues_by_person,
     find_issues_by_person_in_scope,
 )
+from app.services.env import env_int
 from app.services.intent_extractor import IntentExtractor
 from app.services.language_normalizer import normalize_for_intent
 from app.services.reasoning_policy import ReasoningPolicy
@@ -30,6 +40,8 @@ class DemoAgent:
         self.reasoning_policy = ReasoningPolicy()
         self.action_planner = ActionPlanner()
         self.action_validator = ActionValidator()
+        self.llm_reasoner = AgentReasoner()
+        self.llm_call_counts: dict[str, int] = {}
         self.conversation_manager = ConversationManager()
         self.retriever = ProductRetriever()
 
@@ -109,12 +121,48 @@ class DemoAgent:
             last_feature=self.sessions.latest_signal_value(request.session_id, "feature_interest"),
         )
         signals.extend(follow_up_signals)
-        proposed_action = follow_up_action or self.action_planner.plan(
-            request.message,
-            intent_trace,
-            selected_issue_id=request.selected_issue_id,
-            allowed_issue_projects=set(workspace_scope.allowed_issue_projects),
-        )
+        proposed_action = self._hard_boundary_action(normalized_message) or follow_up_action
+        llm_result: AgentReasoningResult | None = None
+        llm_retrieved_docs: list[RetrievedDocument] = []
+        llm_attempted = False
+        if (
+            proposed_action is None
+            and self._should_try_llm_first(normalized_message, intent_trace)
+        ):
+            llm_attempted = True
+            llm_result, llm_retrieved_docs = self._reason_with_llm(
+                request,
+                normalized_message,
+                workspace_scope,
+            )
+            if llm_result:
+                intent_trace, signals, proposed_action = self._apply_llm_result(
+                    llm_result,
+                    signals,
+                )
+        if proposed_action is None and not llm_result:
+            proposed_action = self.action_planner.plan(
+                request.message,
+                intent_trace,
+                selected_issue_id=request.selected_issue_id,
+                allowed_issue_projects=set(workspace_scope.allowed_issue_projects),
+            )
+        if (
+            proposed_action is None
+            and not llm_attempted
+        ):
+            llm_attempted = True
+            llm_result, llm_retrieved_docs = self._reason_with_llm(
+                request,
+                normalized_message,
+                workspace_scope,
+            )
+            if llm_result:
+                intent_trace, signals, proposed_action = self._apply_llm_result(
+                    llm_result,
+                    signals,
+                )
+
         validated_action = self.action_validator.validate(
             request.product_id,
             proposed_action,
@@ -123,11 +171,13 @@ class DemoAgent:
         self._refine_issue_targeting(request.message, intent_trace, validated_action, workspace_scope)
         if validated_action:
             signals.extend(self._person_signals(request.message, workspace_scope))
-        retrieved_docs = (
-            []
-            if proposed_action and not validated_action
-            else self.retriever.retrieve(request.product_id, normalized_message)
-        )
+        retrieved_docs = []
+        if proposed_action and not validated_action:
+            retrieved_docs = []
+        elif llm_retrieved_docs:
+            retrieved_docs = llm_retrieved_docs
+        else:
+            retrieved_docs = self.retriever.retrieve(request.product_id, normalized_message)
 
         if not self.sessions.is_active_turn(request.session_id, request.turn_id):
             return self._stale_response(
@@ -142,7 +192,13 @@ class DemoAgent:
             speech = self._denied_speech(proposed_action.type, request.message, workspace_scope)
             status = "denied"
         else:
-            speech = self._speech(request.message, intent_trace, validated_action, retrieved_docs, workspace_scope)
+            speech = (
+                llm_result.clarification_question
+                if llm_result and not validated_action and llm_result.clarification_question
+                else llm_result.speech
+                if llm_result
+                else self._speech(request.message, intent_trace, validated_action, retrieved_docs, workspace_scope)
+            )
             status = "completed"
 
         self.sessions.store_signals(request.session_id, request.turn_id, signals)
@@ -376,6 +432,12 @@ class DemoAgent:
                 "highlight controls, answer workflow questions, and block requests outside this product."
             )
 
+        if self._is_greeting(message):
+            name = self._extract_visitor_name(message)
+            if name:
+                return f"Hey {name}! Welcome to Pixel. What would you like to explore first — planning, issues, projects, teams, or integrations?"
+            return "Hey there! Welcome to Pixel. What would you like to explore — planning, issues, projects, teams, or integrations?"
+
         if intent_trace.relevant_feature == "Cycles":
             return self._grounded_prefix(retrieved_docs) + "I'll show you the current cycle."
         if intent_trace.relevant_feature == "Issues":
@@ -420,6 +482,123 @@ class DemoAgent:
             return []
         return [Signal(type="person_interest", value=issue.assignee, confidence=0.84)]
 
+    def _signals_from_trace(self, intent_trace: IntentTrace) -> list[Signal]:
+        signals: list[Signal] = []
+        if intent_trace.relevant_feature:
+            signals.append(
+                Signal(
+                    type="feature_interest",
+                    value=intent_trace.relevant_feature.lower(),
+                    confidence=max(intent_trace.confidence, 0.7),
+                )
+            )
+        if intent_trace.pain_point:
+            signals.append(
+                Signal(
+                    type="pain_point",
+                    value=intent_trace.pain_point.lower(),
+                    confidence=max(intent_trace.confidence, 0.7),
+                )
+            )
+        return signals
+
+    def _hard_boundary_action(self, normalized_message: str) -> ProposedAction | None:
+        if self._mentions_external_crm(normalized_message):
+            return ProposedAction(type="OPEN_SALESFORCE")
+        if self._mentions_external_email(normalized_message):
+            return ProposedAction(type="OPEN_GMAIL")
+        if self._mentions_destructive_operation(normalized_message):
+            return ProposedAction(type="DELETE_ISSUES")
+        return None
+
+    def _mentions_external_crm(self, text: str) -> bool:
+        return bool(re.search(r"\b(salesforce|crm|opportunit(?:y|ies)|leads?)\b", text))
+
+    def _mentions_external_email(self, text: str) -> bool:
+        if "gmail" in text:
+            return True
+        return bool(
+            re.search(r"\b(open|pull up|check|read|show)\b", text)
+            and re.search(r"\b(email|inbox)\b", text)
+        )
+
+    def _mentions_destructive_operation(self, text: str) -> bool:
+        return bool(
+            re.search(r"\b(delete|erase|wipe|clear)\b", text)
+            or "remove all" in text
+            or "delete all" in text
+        )
+
+    def _reason_with_llm(
+        self,
+        request: TurnRequest,
+        normalized_message: str,
+        workspace_scope: WorkspaceScope,
+    ) -> tuple[AgentReasoningResult | None, list[RetrievedDocument]]:
+        if not self.llm_reasoner.enabled() or not self._can_use_llm(request.session_id):
+            return None, []
+
+        retrieved_docs = self.retriever.retrieve(request.product_id, normalized_message)
+        self._record_llm_call(request.session_id)
+        llm_result = self.llm_reasoner.reason(
+            AgentReasoningContext(
+                product_id=request.product_id,
+                message=request.message,
+                current_page=request.current_page,
+                selected_issue_id=request.selected_issue_id,
+                workspace_scope=workspace_scope,
+                retrieved_docs=retrieved_docs,
+            )
+        )
+        return llm_result, retrieved_docs
+
+    def _apply_llm_result(
+        self,
+        llm_result: AgentReasoningResult,
+        signals: list[Signal],
+    ) -> tuple[IntentTrace, list[Signal], ProposedAction | None]:
+        intent_trace = llm_result.intent_trace
+        updated_signals = [signal for signal in signals if signal.type != "feature_interest"]
+        updated_signals.extend(self._signals_from_trace(intent_trace))
+        proposed_action = None
+        if llm_result.proposed_action:
+            proposed_action = ProposedAction(
+                type=llm_result.proposed_action.type,
+                payload=llm_result.proposed_action.payload,
+            )
+        return intent_trace, updated_signals, proposed_action
+
+    def _can_use_llm(self, session_id: str) -> bool:
+        max_calls = env_int("LLM_MAX_CALLS_PER_SESSION", 25)
+        if max_calls <= 0:
+            return False
+        return self.llm_call_counts.get(session_id, 0) < max_calls
+
+    def _record_llm_call(self, session_id: str) -> None:
+        self.llm_call_counts[session_id] = self.llm_call_counts.get(session_id, 0) + 1
+
+    def _should_try_llm_first(self, normalized_message: str, intent_trace: IntentTrace) -> bool:
+        if intent_trace.relevant_feature is not None:
+            return False
+        if re.search(r"\b(open|show|create|make|add|assign|reassign|set up|setup|connect)\b", normalized_message):
+            return False
+        if any(
+            phrase in normalized_message
+            for phrase in (
+                "week by week",
+                "each week",
+                "next batch of work",
+                "how does my team",
+                "how should my team",
+                "best practice",
+                "what is the best way",
+                "workflow",
+                "process",
+            )
+        ):
+            return True
+        return intent_trace.relevant_feature is None
+
     def _team_count(self, workspace_scope: WorkspaceScope) -> int:
         return len(self._known_team_members(workspace_scope))
 
@@ -445,6 +624,33 @@ class DemoAgent:
                 "can you do",
             )
         )
+
+    def _is_greeting(self, message: str) -> bool:
+        text = normalize_for_intent(message)
+        greetings = (
+            "hi", "hii", "hiii", "hello", "hey", "howdy", "greetings",
+            "good morning", "good afternoon", "good evening",
+            "whats up", "sup", "yo",
+        )
+        stripped = text.strip()
+        if stripped in greetings:
+            return True
+        if any(
+            stripped.startswith(g + " ") or stripped.startswith(g + " there")
+            for g in greetings
+        ):
+            return True
+        return bool(re.match(r"^(?:hi+|hey+|hello+|yo)\b", stripped))
+
+    def _extract_visitor_name(self, message: str) -> str | None:
+        text = normalize_for_intent(message)
+        match = re.search(
+            r"\b(?:i am|im|i m|my name is|this is|its|it s|call me)\s+([a-z][a-z]+)",
+            text,
+        )
+        if match:
+            return match.group(1).capitalize()
+        return None
 
     def _asks_vague_create_request(self, text: str) -> bool:
         return bool(

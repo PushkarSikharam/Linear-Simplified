@@ -111,106 +111,125 @@ export class HybridVoiceEngine {
     }
   }
 
-  public async speakLocalResponse(text: string, onEnded?: () => void, resumeListening = false): Promise<void> {
+  public speakLocalResponse(text: string, onEnded?: () => void, resumeListening = false): Promise<void> {
     this.isStopped = false;
     this.isSpeakingSelf = true;
     this.cancelSpeech();
     this.pauseRecognition();
 
-    // Give Microsoft Azure enough time to synthesize premium speech before falling back.
-    // The fallback is intentionally visible in the UI so the demo never mislabels audio.
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-
-      if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
-        const engineType = res.headers.get("X-TTS-Engine");
-        if (engineType?.includes("azure")) {
-          this.mode = "azure";
-        } else if (engineType?.includes("gemini")) {
-          this.mode = "gemini";
-        }
-
-        const blob = await res.blob();
-        const audioUrl = URL.createObjectURL(blob);
-        this.currentAudioUrl = audioUrl;
-
-        const audio = new Audio(audioUrl);
-        this.currentAudio = audio;
-
-        let animInterval: ReturnType<typeof setInterval> | null = null;
-
-        audio.onplay = () => {
-          if (this.isStopped) {
-            audio.pause();
-            return;
+    return new Promise<void>(async (resolve) => {
+      let isFinished = false;
+      const finish = () => {
+        if (!isFinished) {
+          isFinished = true;
+          try {
+            onEnded?.();
+          } finally {
+            resolve();
           }
-          this.setStatus("Speaking", this.mode);
-          this.callbacks.onAgentSpeech(text);
+        }
+      };
 
-          animInterval = setInterval(() => {
-            if (!this.currentAudio || this.currentAudio.paused) {
-              if (animInterval) clearInterval(animInterval);
+      // Give Microsoft Azure enough time to synthesize premium speech before falling back.
+      // The fallback is intentionally visible in the UI so the demo never mislabels audio.
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+
+        if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
+          const engineType = res.headers.get("X-TTS-Engine");
+          if (engineType?.includes("azure")) {
+            this.mode = "azure";
+          } else if (engineType?.includes("gemini")) {
+            this.mode = "gemini";
+          }
+
+          const blob = await res.blob();
+          const audioUrl = URL.createObjectURL(blob);
+          this.currentAudioUrl = audioUrl;
+
+          const audio = new Audio(audioUrl);
+          this.currentAudio = audio;
+
+          let animInterval: ReturnType<typeof setInterval> | null = null;
+
+          audio.onplay = () => {
+            if (this.isStopped) {
+              audio.pause();
+              finish();
               return;
             }
-            const randomBars: SpectrumData = [
-              Math.floor(25 + Math.random() * 45),
-              Math.floor(40 + Math.random() * 55),
-              Math.floor(35 + Math.random() * 50),
-              Math.floor(30 + Math.random() * 45),
-              Math.floor(20 + Math.random() * 35)
-            ];
-            this.callbacks.onSpectrumChange(randomBars);
-          }, 80);
-        };
+            this.setStatus("Speaking", this.mode);
+            this.callbacks.onAgentSpeech(text);
 
-        const handleDone = () => {
-          if (animInterval) { clearInterval(animInterval); animInterval = null; }
-          this.callbacks.onSpectrumChange([15, 20, 15, 18, 12]);
-          this.cancelSpeech();
-
-          if (this.isStopped) {
-            this.isSpeakingSelf = false;
-            this.setStatus("Idle", this.mode);
-            return;
-          }
-
-          if (resumeListening) {
-            this.setStatus("Listening", this.mode);
-            setTimeout(() => {
-              this.isSpeakingSelf = false;
-              if (!this.isStopped && this.mode === "local") {
-                void this.startLocalEngine("Resuming after speech");
+            animInterval = setInterval(() => {
+              if (!this.currentAudio || this.currentAudio.paused) {
+                if (animInterval) clearInterval(animInterval);
+                return;
               }
-            }, 400);
-          } else {
-            this.isSpeakingSelf = false;
-            this.stop();
-          }
-          onEnded?.();
-        };
+              const randomBars: SpectrumData = [
+                Math.floor(25 + Math.random() * 45),
+                Math.floor(40 + Math.random() * 55),
+                Math.floor(35 + Math.random() * 50),
+                Math.floor(30 + Math.random() * 45),
+                Math.floor(20 + Math.random() * 35)
+              ];
+              this.callbacks.onSpectrumChange(randomBars);
+            }, 80);
+          };
 
-        audio.onended = handleDone;
-        audio.onerror = () => {
-          if (animInterval) { clearInterval(animInterval); animInterval = null; }
-          this.fallbackBrowserSpeech(text, onEnded, resumeListening);
-        };
+          const handleDone = () => {
+            if (animInterval) { clearInterval(animInterval); animInterval = null; }
+            this.callbacks.onSpectrumChange([15, 20, 15, 18, 12]);
+            this.cancelSpeech();
 
-        await audio.play();
-        return;
+            if (this.isStopped) {
+              this.isSpeakingSelf = false;
+              this.setStatus("Idle", this.mode);
+              finish();
+              return;
+            }
+
+            if (resumeListening) {
+              this.setStatus("Listening", this.mode);
+              setTimeout(() => {
+                this.isSpeakingSelf = false;
+                if (!this.isStopped && this.mode === "local") {
+                  void this.startLocalEngine("Resuming after speech");
+                }
+              }, 400);
+            } else {
+              this.isSpeakingSelf = false;
+              this.stop();
+            }
+            finish();
+          };
+
+          audio.onended = handleDone;
+          audio.onerror = () => {
+            if (animInterval) { clearInterval(animInterval); animInterval = null; }
+            this.fallbackBrowserSpeech(text, finish, resumeListening);
+          };
+
+          await audio.play().catch(() => {
+            if (animInterval) { clearInterval(animInterval); animInterval = null; }
+            this.fallbackBrowserSpeech(text, finish, resumeListening);
+          });
+          return;
+        }
+      } catch {
+        // Cloud TTS unavailable or timed out — use browser voice
       }
-    } catch {
-      // Cloud TTS unavailable or timed out — use browser voice
-    }
 
-    this.fallbackBrowserSpeech(text, onEnded, resumeListening);
+      this.fallbackBrowserSpeech(text, finish, resumeListening);
+    });
   }
 
   private fallbackBrowserSpeech(text: string, onEnded?: () => void, resumeListening = false): void {

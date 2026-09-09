@@ -119,6 +119,7 @@ type SpeechRecognitionWindow = Window &
     __disableAutoGreetingSpeech?: boolean;
     __disableTextResponseSpeech?: boolean;
     __emitVoiceTranscript?: (transcript: string) => void;
+    __spokenAgentReplies?: string[];
   };
 
 const initialTranscript: TranscriptMessage[] = [
@@ -188,6 +189,7 @@ export default function Home() {
   const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [turnStatus, setTurnStatus] = useState<TurnStatus>("Ready");
+  const [visitorName, setVisitorName] = useState<string | null>(null);
   const currentPage = uiState.current_page;
   const activeNavItem = useMemo(
     () => navItems.find((item) => item.id === currentPage),
@@ -347,6 +349,7 @@ export default function Home() {
     setWorkspaceScopes(demoWorkspaceScopes);
     setWorkspaceScope(demoWorkspaceScope);
     setDraftPrefill({});
+    setVisitorName(null);
     setIsSending(false);
     setTurnStatus("Ready");
     void resetStoredDemoData()
@@ -580,11 +583,19 @@ export default function Home() {
       const validatedAction = result.validated_action;
       if (validatedAction) {
         if (validatedAction.type === "HIGHLIGHT_ADD_MEMBER_BUTTON") {
+          const requestedName = validatedAction.payload?.name;
           setDraftPrefill((currentPrefill) => ({
             ...currentPrefill,
             teamMember: {
-              name: validatedAction.payload?.name
-            }
+              name: requestedName
+            },
+            issue: asksForTicketCreation(normalizeText(trimmedMessage)) && requestedName
+              ? {
+                assignee: requestedName,
+                priority: extractPriority(normalizeText(trimmedMessage)),
+                title: extractIssueTitle(trimmedMessage)
+              }
+              : currentPrefill.issue
           }));
         }
         runAction(validatedAction);
@@ -642,7 +653,14 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
     const draftRequest = parseTicketDraftRequest(message);
     if (!draftRequest) return null;
 
+    const normalizedMessage = normalizeText(message);
     const requestedName = draftRequest.assignee;
+    const hasMixedAssignmentIntent = /\b(open|start|draft)\b/.test(normalizedMessage)
+      && /\b(assign|assigned|owner)\b/.test(normalizedMessage);
+    if (requestedName && !hasMixedAssignmentIntent) {
+      return null;
+    }
+
     const companyMember = requestedName ? findTeamMember(team, requestedName) : undefined;
     const matchingMember = requestedName ? findTeamMember(scopedTeam, requestedName) : undefined;
     const turnId = nextTurnIdRef.current;
@@ -780,6 +798,50 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
       );
     }
 
+    const introducedName = extractVisitorName(message);
+    if (introducedName) {
+      setVisitorName(introducedName);
+      return sayAndReturn(
+        `Nice to meet you, ${introducedName}. What would you like to explore first: planning, tickets, projects, teams, or integrations?`
+      );
+    }
+
+    if (asksCapabilities(text)) {
+      return sayAndReturn(
+        `I can guide this Pixel demo through ${workspaceScope.name}: planning, issues, projects, teams, and integrations. I can open views, find tickets, update issue fields, create demo records, and block work outside this scope.`
+      );
+    }
+
+    if (asksIdentityQuestion(text)) {
+      return sayAndReturn(
+        "I'm Edith, Pixel's live demo guide. I can walk you through planning, tickets, projects, teams, and integrations inside this workspace."
+      );
+    }
+
+    if (asksPlainGreeting(text)) {
+      return sayAndReturn(
+        visitorName
+          ? `Hi ${visitorName}. What would you like to explore next in Pixel?`
+          : "Hi there. What would you like to explore first in Pixel?"
+      );
+    }
+
+    const teamMemberDraft = parseTeamMemberDraftRequest(message);
+    if (teamMemberDraft) {
+      setDraftPrefill((currentPrefill) => ({
+        ...currentPrefill,
+        teamMember: { name: teamMemberDraft.name }
+      }));
+      return sayAndReturn(
+        teamMemberDraft.name
+          ? `I'll open Teams so you can add ${teamMemberDraft.name} to this workspace.`
+          : "Who should I add to the team directory?",
+        teamMemberDraft.name
+          ? { type: "HIGHLIGHT_ADD_MEMBER_BUTTON", payload: { name: teamMemberDraft.name } }
+          : { type: "OPEN_TEAMS" }
+      );
+    }
+
     if (asksVagueCreateRequest(text)) {
       return sayAndReturn(
         "What should I create: a ticket, a project, a cycle, or a team member?"
@@ -800,17 +862,14 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
       );
     }
 
-    if (asksCapabilities(text)) {
-      return sayAndReturn(
-        `I can guide this Pixel demo through ${workspaceScope.name}: planning, issues, projects, teams, and integrations. I can open views, find tickets, update issue fields, create demo records, and block work outside this scope.`
-      );
-    }
-
     if (asksForNextStep(text)) {
       return sayAndReturn(nextStepSpeech(currentPage, workspaceScope.name));
     }
 
-    const githubAction = inputMode === "text" ? githubConversationActionFor(text) : null;
+    const githubAction =
+      inputMode === "text" && !asksForTicketCreation(text)
+        ? githubConversationActionFor(text)
+        : null;
     if (githubAction) {
       return sayAndReturn(githubAction.speech, githubAction.action);
     }
@@ -2893,18 +2952,19 @@ function ConversationCard({
           void (async () => {
             try {
               const result = await onSendRef.current(text, "voice");
-              if (result?.speech && isTTSEnabledRef.current) {
+              if (result?.speech) {
                 isAgentSpeakingRef.current = true;
-                await engine.speakLocalResponse(result.speech, () => {
+                await speakAgentReply(result.speech, "voice", () => {
                   isAgentSpeakingRef.current = false;
                   engine.stop();
-                }, false);
+                });
               } else {
                 engine.stop();
               }
+            } catch {
+              engine.stop();
             } finally {
               isSubmittingVoiceRef.current = false;
-              engine.stop();
               setLiveTranscript("");
             }
           })();
@@ -2975,6 +3035,11 @@ function ConversationCard({
           void (async () => {
             const result = await onSendRef.current(finalTranscript, "voice");
             setVoiceEngineStatus(result?.speech ? "Speaking" : "Idle");
+            if (result?.speech) {
+              void speakAgentReply(result.speech, "voice", () => {
+                setVoiceEngineStatus("Idle");
+              });
+            }
           })();
         }, getVoiceSilenceTimeoutMs());
       };
@@ -3000,9 +3065,30 @@ function ConversationCard({
     void (async () => {
       const result = await onSend(message, "text");
       if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
-        voiceEngineRef.current?.speakOnly(result.speech);
+        void speakAgentReply(result.speech, "text");
       }
     })();
+  }
+
+  function speakAgentReply(
+    speech: string,
+    source: InputMode,
+    onEnded?: () => void
+  ): Promise<void> {
+    if (typeof window !== "undefined") {
+      const speechWindow = window as SpeechRecognitionWindow;
+      speechWindow.__spokenAgentReplies = [
+        ...(speechWindow.__spokenAgentReplies ?? []),
+        speech
+      ];
+    }
+
+    if (source === "voice") {
+      return voiceEngineRef.current?.speakLocalResponse(speech, onEnded, false) ?? Promise.resolve();
+    }
+
+    voiceEngineRef.current?.speakOnly(speech, onEnded);
+    return Promise.resolve();
   }
 
   function toggleVoiceInput() {
@@ -3109,7 +3195,7 @@ function ConversationCard({
                 void (async () => {
                   const result = await onSend(prompt, "text");
                   if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
-                    voiceEngineRef.current?.speakOnly(result.speech);
+                    void speakAgentReply(result.speech, "text");
                   }
                 })();
               }}
@@ -3133,7 +3219,7 @@ function ConversationCard({
               void (async () => {
                 const result = await onSend(prompt, "text");
                 if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
-                  voiceEngineRef.current?.speakOnly(result.speech);
+                  void speakAgentReply(result.speech, "text");
                 }
               })();
             }}
@@ -3418,7 +3504,7 @@ function asksWhatChanged(text: string): boolean {
 }
 
 function asksCapabilities(text: string): boolean {
-  return /\b(are you capable|what can you do|what are you able|what can this do|can you do)\b/.test(text);
+  return /\b(are you capable|what are you capable|what can you do|what are you able|what can this do|can you do|capable of doing)\b/.test(text);
 }
 
 function asksForNextStep(text: string): boolean {
@@ -3487,6 +3573,33 @@ function githubConversationActionFor(text: string): { speech: string; action: De
 
 function asksTeamCount(text: string): boolean {
   return /\b(how many|count|number of)\b/.test(text) && /\b(team members|members|people|teammates)\b/.test(text);
+}
+
+function asksIdentityQuestion(text: string): boolean {
+  return (
+    /\b(who are you|who r you|what are you|your name|who is edith|hi there who)\b/.test(text)
+    || /\b(hi|hii|hello|hey)\b/.test(text) && /\b(who|what)\b/.test(text)
+  );
+}
+
+function asksPlainGreeting(text: string): boolean {
+  return /^(hi|hii|hello|hey|hi there|hii there|hello there)[?!. ]*$/.test(text);
+}
+
+function extractVisitorName(message: string): string | null {
+  const match = message.match(
+    /\b(?:i am|i'm|im|my name is|this is)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i
+  );
+  if (!match?.[1]) return null;
+
+  const name = titleCase(
+    match[1]
+      .replace(/\b(and|from|with|here|today|checking|looking)\b.*$/i, "")
+      .replace(/[^a-zA-Z ]+/g, "")
+      .trim()
+  );
+
+  return name || null;
 }
 
 function asksProjectCount(text: string): boolean {
@@ -3619,7 +3732,7 @@ function parseIssueUpdateRequest(message: string): {
 
 function extractAssignmentTarget(message: string): string | undefined {
   const match = message.match(
-    /\b(?:to|for|owner is|assignee is|assigned to|assign it to|assign this to)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i
+    /\b(?:assign(?:ed)?\s+to|assign it to|assign this to|owner is|assignee is|to)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i
   );
   if (!match?.[1]) return undefined;
 
@@ -3708,7 +3821,7 @@ function parseTicketDraftRequest(message: string): DraftPrefill["issue"] | null 
   if (!asksForTicketDraft(normalizedMessage)) return null;
 
   return {
-    assignee: extractAssigneeName(message),
+    assignee: extractAssignmentTarget(message) ?? extractAssigneeName(message),
     priority: extractPriority(normalizedMessage),
     title: extractIssueTitle(message)
   };
@@ -3724,7 +3837,9 @@ function asksForTicketCreation(text: string): boolean {
 }
 
 function asksForTicketDraft(text: string): boolean {
-  return /\b(create|make|add|raise|file)\b/.test(text) && /\b(ticket|issue|bug)\b/.test(text);
+  if (!/\b(ticket|issue|bug)\b/.test(text)) return false;
+  if (/\b(create|make|add|raise|file)\b/.test(text)) return true;
+  return /\b(open|start|draft)\b/.test(text) && /\b(new|fresh|assign|assigned|owner)\b/.test(text);
 }
 
 function asksForTicketWorkflowQuestion(text: string): boolean {
@@ -3757,6 +3872,27 @@ function extractAssigneeName(message: string): string | undefined {
     .filter((part) => !stopWords.has(part.toLowerCase()));
 
   return nameParts.length > 0 ? titleCase(nameParts.join(" ")) : undefined;
+}
+
+function parseTeamMemberDraftRequest(message: string): { name?: string } | null {
+  const text = normalizeText(message);
+  if (!/\b(add|create|invite|new)\b/.test(text)) return null;
+  if (!/\b(member|teammate|person|user|employee)\b/.test(text)) return null;
+
+  const match = message.match(
+    /\b(?:member|teammate|person|user|employee)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i
+  ) ?? message.match(
+    /\b(?:called|named|as)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i
+  );
+
+  if (!match?.[1]) return {};
+
+  const name = titleCase(
+    match[1]
+      .replace(/\b(to|in|into|for|the|workspace|team|directory)\b/gi, "")
+      .trim()
+  );
+  return name ? { name } : {};
 }
 
 function extractPriority(normalizedMessage: string): DemoIssue["priority"] {

@@ -12,7 +12,25 @@ sys.path.insert(0, str(API_ROOT))
 
 from app import db
 from app.main import app
+from app.schemas import IntentTrace, TurnRequest
+from app.services.agent import DemoAgent
+from app.services.agent_reasoner import AgentReasoningResult, ReasonedAction
 from app.services.session_manager import SessionManager
+
+
+class FakeGeminiReasoner:
+    def __init__(self, result: AgentReasoningResult) -> None:
+        self.result = result
+        self.context_messages: list[str] = []
+        self.call_count = 0
+
+    def enabled(self) -> bool:
+        return True
+
+    def reason(self, context):
+        self.call_count += 1
+        self.context_messages.append(context.message)
+        return self.result
 
 
 class AgentApiTest(unittest.TestCase):
@@ -450,6 +468,217 @@ class AgentApiTest(unittest.TestCase):
         self.assertIsNone(body["validated_action"])
         self.assertEqual(body["intent_trace"]["relevant_feature"], "Voice")
         self.assertIn("stop the current response", body["speech"])
+
+    def test_llm_reasoner_handles_paraphrased_planning_request(self) -> None:
+        agent = DemoAgent()
+        fake_reasoner = FakeGeminiReasoner(
+            AgentReasoningResult(
+                speech="That maps to weekly planning. I'll open Cycles for this workspace.",
+                proposed_action=ReasonedAction(type="OPEN_CYCLES", payload={}),
+                clarification_question=None,
+                intent_trace=IntentTrace(
+                    goal="Understand weekly planning",
+                    current_intent="Map paraphrase to product workflow",
+                    relevant_feature="Cycles",
+                    reason="The visitor asked how the team plans work week by week.",
+                    confidence=0.91,
+                    status="active",
+                ),
+            )
+        )
+        agent.llm_reasoner = fake_reasoner
+
+        response = agent.handle_turn(
+            TurnRequest(
+                session_id="session_llm",
+                turn_id=1,
+                product_id="linear_simplified",
+                message="How do we pick the next batch of work?",
+                input_mode="text",
+                current_page="dashboard",
+            )
+        )
+
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(response.validated_action.type, "OPEN_CYCLES")
+        self.assertEqual(response.intent_trace.relevant_feature, "Cycles")
+        self.assertIn("weekly planning", response.speech)
+        self.assertEqual(fake_reasoner.context_messages, ["How do we pick the next batch of work?"])
+
+    def test_strong_weekly_planning_signal_does_not_get_overridden_by_llm(self) -> None:
+        agent = DemoAgent()
+        fake_reasoner = FakeGeminiReasoner(
+            AgentReasoningResult(
+                speech="I'll open Teams.",
+                proposed_action=ReasonedAction(type="OPEN_TEAMS", payload={}),
+                clarification_question=None,
+                intent_trace=IntentTrace(
+                    goal="Team workflow",
+                    current_intent="Understand team work",
+                    relevant_feature="Teams",
+                    reason="The visitor mentioned their team.",
+                    confidence=0.86,
+                    status="active",
+                ),
+            )
+        )
+        agent.llm_reasoner = fake_reasoner
+
+        response = agent.handle_turn(
+            TurnRequest(
+                session_id="session_llm_no_override",
+                turn_id=1,
+                product_id="linear_simplified",
+                message="How does my team plan work week by week?",
+                input_mode="text",
+                current_page="dashboard",
+            )
+        )
+
+        self.assertEqual(response.status, "completed")
+        self.assertEqual(response.validated_action.type, "OPEN_CYCLES")
+        self.assertEqual(response.intent_trace.relevant_feature, "Cycles")
+        self.assertEqual(fake_reasoner.call_count, 0)
+
+    def test_llm_reasoner_output_is_still_blocked_by_validator(self) -> None:
+        agent = DemoAgent()
+        fake_reasoner = FakeGeminiReasoner(
+            AgentReasoningResult(
+                speech="I'll open Salesforce.",
+                proposed_action=ReasonedAction(type="OPEN_SALESFORCE", payload={}),
+                clarification_question=None,
+                intent_trace=IntentTrace(
+                    goal="External CRM",
+                    current_intent="Open external app",
+                    relevant_feature="Integrations",
+                    reason="The visitor asked for an app outside Pixel.",
+                    confidence=0.9,
+                    status="active",
+                ),
+            )
+        )
+        agent.llm_reasoner = fake_reasoner
+
+        response = agent.handle_turn(
+            TurnRequest(
+                session_id="session_llm_guard",
+                turn_id=1,
+                product_id="linear_simplified",
+                message="Can you pull up our CRM pipeline?",
+                input_mode="text",
+                current_page="dashboard",
+            )
+        )
+
+        self.assertEqual(response.status, "denied")
+        self.assertEqual(response.proposed_action.type, "OPEN_SALESFORCE")
+        self.assertIsNone(response.validated_action)
+        self.assertIn("I can only demonstrate Pixel workflows", response.speech)
+
+    def test_external_crm_request_is_blocked_before_llm(self) -> None:
+        agent = DemoAgent()
+        fake_reasoner = FakeGeminiReasoner(
+            AgentReasoningResult(
+                speech="Would you like to check integrations instead?",
+                proposed_action=None,
+                clarification_question=None,
+                intent_trace=IntentTrace(
+                    goal="External CRM",
+                    current_intent="Ask about CRM pipeline",
+                    relevant_feature="Integrations",
+                    reason="The visitor asked about an external CRM.",
+                    confidence=0.83,
+                    status="active",
+                ),
+            )
+        )
+        agent.llm_reasoner = fake_reasoner
+
+        response = agent.handle_turn(
+            TurnRequest(
+                session_id="session_llm_hard_guard",
+                turn_id=1,
+                product_id="linear_simplified",
+                message="Can you pull up our Salesforce pipeline?",
+                input_mode="text",
+                current_page="dashboard",
+            )
+        )
+
+        self.assertEqual(response.status, "denied")
+        self.assertEqual(response.proposed_action.type, "OPEN_SALESFORCE")
+        self.assertIsNone(response.validated_action)
+        self.assertEqual(fake_reasoner.call_count, 0)
+
+    def test_external_email_request_is_blocked_before_llm(self) -> None:
+        agent = DemoAgent()
+        fake_reasoner = FakeGeminiReasoner(
+            AgentReasoningResult(
+                speech="I can explain issue notifications.",
+                proposed_action=None,
+                clarification_question=None,
+                intent_trace=IntentTrace(
+                    goal="External email",
+                    current_intent="Open external email",
+                    relevant_feature="Integrations",
+                    reason="The visitor asked for email access.",
+                    confidence=0.82,
+                    status="active",
+                ),
+            )
+        )
+        agent.llm_reasoner = fake_reasoner
+
+        response = agent.handle_turn(
+            TurnRequest(
+                session_id="session_llm_email_guard",
+                turn_id=1,
+                product_id="linear_simplified",
+                message="Can you check my Gmail inbox?",
+                input_mode="text",
+                current_page="dashboard",
+            )
+        )
+
+        self.assertEqual(response.status, "denied")
+        self.assertEqual(response.proposed_action.type, "OPEN_GMAIL")
+        self.assertIsNone(response.validated_action)
+        self.assertEqual(fake_reasoner.call_count, 0)
+
+    def test_destructive_request_is_blocked_before_llm(self) -> None:
+        agent = DemoAgent()
+        fake_reasoner = FakeGeminiReasoner(
+            AgentReasoningResult(
+                speech="I can clean up the board.",
+                proposed_action=None,
+                clarification_question=None,
+                intent_trace=IntentTrace(
+                    goal="Delete work",
+                    current_intent="Delete issues",
+                    relevant_feature="Issues",
+                    reason="The visitor asked to delete work.",
+                    confidence=0.88,
+                    status="active",
+                ),
+            )
+        )
+        agent.llm_reasoner = fake_reasoner
+
+        response = agent.handle_turn(
+            TurnRequest(
+                session_id="session_llm_delete_guard",
+                turn_id=1,
+                product_id="linear_simplified",
+                message="Can you delete every ticket in this project?",
+                input_mode="text",
+                current_page="issues",
+            )
+        )
+
+        self.assertEqual(response.status, "denied")
+        self.assertEqual(response.proposed_action.type, "DELETE_ISSUES")
+        self.assertIsNone(response.validated_action)
+        self.assertEqual(fake_reasoner.call_count, 0)
 
     def test_correction_prefers_positive_feature_over_negated_feature(self) -> None:
         response = self.client.post(
