@@ -23,6 +23,8 @@ class ActionPlanner:
     ) -> ProposedAction | None:
         text = normalize_for_intent(message)
 
+        if self._mentions_system_architecture(text):
+            return ProposedAction(type="OPEN_SYSTEM_ARCHITECTURE")
         if "salesforce" in text:
             return ProposedAction(type="OPEN_SALESFORCE")
         if "gmail" in text or "email" in text:
@@ -93,6 +95,20 @@ class ActionPlanner:
 
     def _mentions_ticket(self, text: str) -> bool:
         return any(term in text for term in ("ticket", "issue", "bug"))
+
+    def _mentions_system_architecture(self, text: str) -> bool:
+        return any(
+            phrase in text
+            for phrase in (
+                "system architecture",
+                "technical architecture",
+                "product architecture",
+                "architecture page",
+                "open architecture",
+                "show architecture",
+                "view architecture",
+            )
+        )
 
     def _mentions_all_matching_tickets(self, text: str) -> bool:
         return self._mentions_ticket(text) and any(term in text for term in ("all", "any", "assigned to her", "assigned to him"))

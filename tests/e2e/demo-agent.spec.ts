@@ -386,6 +386,18 @@ test("opens the sprint planning view from chat and shows retrieved product conte
   await expect(page.getByTestId("transcript")).toContainText("I'll show you the current cycle.");
 });
 
+test("opens the system architecture from Edith chat", async ({ page }) => {
+  await openApp(page);
+
+  await page.getByTestId("chat-input").fill("open the system architecture");
+  await page.getByTestId("chat-send").click();
+
+  await expect(page).toHaveURL(/\/architecture$/);
+  await expect(page.getByRole("heading", {
+    name: "How Pixel turns conversation into scoped product action."
+  })).toBeVisible();
+});
+
 test("runs suggested demo turns and resets to a fresh session", async ({ page }) => {
   await openApp(page);
 

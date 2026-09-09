@@ -103,6 +103,7 @@ export type DemoActionType =
   | "OPEN_CYCLES"
   | "OPEN_TEAMS"
   | "OPEN_INTEGRATIONS"
+  | "OPEN_SYSTEM_ARCHITECTURE"
   | "OPEN_DEMO_ISSUE"
   | "CREATE_DEMO_ISSUE"
   | "CREATE_DEMO_TEAM_MEMBER"
@@ -123,6 +124,7 @@ export type DemoAction =
   | { type: "OPEN_CYCLES"; payload?: Record<string, never> }
   | { type: "OPEN_TEAMS"; payload?: Record<string, never> }
   | { type: "OPEN_INTEGRATIONS"; payload?: Record<string, never> }
+  | { type: "OPEN_SYSTEM_ARCHITECTURE"; payload?: Record<string, never> }
   | { type: "OPEN_DEMO_ISSUE"; payload: { issue_id: string } }
   | { type: "CREATE_DEMO_ISSUE"; payload: DemoIssue }
   | { type: "CREATE_DEMO_TEAM_MEMBER"; payload: DemoTeamMember }

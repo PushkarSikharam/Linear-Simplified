@@ -53,6 +53,7 @@ class ActionValidator:
             "OPEN_CYCLES",
             "OPEN_TEAMS",
             "OPEN_INTEGRATIONS",
+            "OPEN_SYSTEM_ARCHITECTURE",
             "HIGHLIGHT_CYCLE_PROGRESS",
             "OPEN_GITHUB_SETUP",
             "HIGHLIGHT_GITHUB_CARD",

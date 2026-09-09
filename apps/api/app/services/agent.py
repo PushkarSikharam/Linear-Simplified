@@ -280,6 +280,12 @@ class DemoAgent:
         retrieved_docs: list[RetrievedDocument],
         workspace_scope: WorkspaceScope,
     ) -> str:
+        if validated_action and validated_action.type == "OPEN_SYSTEM_ARCHITECTURE":
+            return (
+                "I'll open the system architecture view so you can see how Pixel listens, "
+                "checks project scope, validates actions, and updates the workspace."
+            )
+
         if validated_action and validated_action.type == "OPEN_DEMO_ISSUE":
             issue_id = validated_action.payload.get("issue_id")
             issue = find_issue_by_id(issue_id) if isinstance(issue_id, str) else None
@@ -492,6 +498,14 @@ class DemoAgent:
         validated_action,
         workspace_scope: WorkspaceScope,
     ) -> None:
+        if validated_action and validated_action.type == "OPEN_SYSTEM_ARCHITECTURE":
+            intent_trace.goal = "System architecture"
+            intent_trace.current_intent = "Open architecture view"
+            intent_trace.relevant_feature = "Architecture"
+            intent_trace.reason = "Opening the product architecture view through an approved demo action."
+            intent_trace.confidence = 0.9
+            return
+
         if validated_action and validated_action.type in {
             "OPEN_DEMO_ISSUE",
             "HIGHLIGHT_ASSIGNMENT_CONTROL",

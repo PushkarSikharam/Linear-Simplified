@@ -77,6 +77,17 @@ export function executeDemoAction(
     };
   }
 
+  if (action.type === "OPEN_SYSTEM_ARCHITECTURE") {
+    return {
+      nextState: {
+        ...state,
+        highlighted_target: undefined,
+        issue_filter_assignee: undefined
+      },
+      event: createUiEvent(action.type, "executed", "Opened system architecture.")
+    };
+  }
+
   if (action.type === "CREATE_DEMO_ISSUE") {
     if (!isDemoIssue(action.payload)) {
       return {

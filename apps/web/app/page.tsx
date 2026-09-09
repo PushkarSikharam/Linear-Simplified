@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { actionByPage, executeDemoAction } from "@/lib/action-executor";
 import { cancelAgentTurn, type AgentTurnResponse, sendAgentTurn } from "@/lib/agent-api";
 import {
@@ -165,6 +166,7 @@ const issueStatuses = ["Todo", "In progress", "Review", "Done"] as const;
 const priorities = ["Low", "Medium", "High"] as const;
 
 export default function Home() {
+  const router = useRouter();
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const activeTurnIdRef = useRef<number | null>(null);
   const nextTurnIdRef = useRef(1);
@@ -275,6 +277,18 @@ export default function Home() {
   }
 
   function runAction(action: DemoAction) {
+    if (action.type === "OPEN_SYSTEM_ARCHITECTURE") {
+      recordUiEvent({
+        id: crypto.randomUUID(),
+        action_type: action.type,
+        status: "executed",
+        description: "Opened the system architecture view.",
+        created_at: new Date().toISOString()
+      });
+      router.push("/architecture");
+      return;
+    }
+
     setUiState((currentState) => {
       const nextIssues =
         action.type === "CREATE_DEMO_ISSUE"
@@ -756,6 +770,13 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
       return sayAndReturn(
         "Here is a clean guided path: start with sprint planning, open Maya's ticket, assign it to Noah, create a ticket for a new teammate, then try Salesforce to prove guardrails.",
         { type: "OPEN_DASHBOARD" }
+      );
+    }
+
+    if (asksSystemArchitecture(text)) {
+      return sayAndReturn(
+        "I'll open the system architecture view so you can see how Pixel listens, checks project scope, validates actions, and updates the workspace.",
+        { type: "OPEN_SYSTEM_ARCHITECTURE" }
       );
     }
 
@@ -3388,6 +3409,10 @@ function asksForEvaluatorDemo(text: string): boolean {
   );
 }
 
+function asksSystemArchitecture(text: string): boolean {
+  return /\b(system architecture|technical architecture|product architecture|architecture page|open architecture|show architecture|view architecture)\b/.test(text);
+}
+
 function asksWhatChanged(text: string): boolean {
   return /\b(what did we .*change|what changed|what just happened|what did you update)\b/.test(text);
 }
@@ -3792,7 +3817,12 @@ function localTurnResponse({
           : action?.type === "UPDATE_DEMO_ISSUE"
             ? "Update issue"
             : "Clarify next step",
-      relevant_feature: action?.type === "HIGHLIGHT_ADD_MEMBER_BUTTON" ? "Teams" : "Issues",
+      relevant_feature:
+        action?.type === "OPEN_SYSTEM_ARCHITECTURE"
+          ? "Architecture"
+          : action?.type === "HIGHLIGHT_ADD_MEMBER_BUTTON"
+            ? "Teams"
+            : "Issues",
       reason: "Handled locally because the browser has the current session directory.",
       confidence: 0.9,
       status: "active"

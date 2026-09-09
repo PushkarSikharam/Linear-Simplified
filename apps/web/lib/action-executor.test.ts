@@ -130,4 +130,12 @@ describe("executeDemoAction", () => {
     expect(result.nextState.selected_issue_id).toBe("PIX-143");
     expect(result.nextState.highlighted_target).toBe("created_issue");
   });
+
+  it("accepts the system architecture action without mutating product view state", () => {
+    const result = executeDemoAction(baseState, { type: "OPEN_SYSTEM_ARCHITECTURE" });
+
+    expect(result.event.status).toBe("executed");
+    expect(result.event.description).toBe("Opened system architecture.");
+    expect(result.nextState.current_page).toBe("dashboard");
+  });
 });

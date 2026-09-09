@@ -31,6 +31,7 @@ export const productConfig: ProductConfig = {
     "OPEN_CYCLES",
     "OPEN_TEAMS",
     "OPEN_INTEGRATIONS",
+    "OPEN_SYSTEM_ARCHITECTURE",
     "OPEN_DEMO_ISSUE",
     "CREATE_DEMO_ISSUE",
     "UPDATE_DEMO_ISSUE",

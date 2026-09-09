@@ -666,6 +666,25 @@ class AgentApiTest(unittest.TestCase):
         self.assertEqual(body["validated_action"]["type"], "HIGHLIGHT_GITHUB_CARD")
         self.assertEqual(body["retrieved_context"][0]["source"], "integrations.md")
 
+    def test_system_architecture_request_opens_architecture_view(self) -> None:
+        response = self.client.post(
+            "/api/turn",
+            json={
+                "session_id": "session_test",
+                "turn_id": 29,
+                "product_id": "linear_simplified",
+                "message": "Open the system architecture.",
+                "input_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["validated_action"]["type"], "OPEN_SYSTEM_ARCHITECTURE")
+        self.assertEqual(body["intent_trace"]["relevant_feature"], "Architecture")
+        self.assertIn("system architecture view", body["speech"])
+
     def test_slack_question_highlights_slack_card(self) -> None:
         response = self.client.post(
             "/api/turn",
