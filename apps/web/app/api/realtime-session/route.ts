@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
+import { rejectUnauthenticated } from "@/lib/server-auth";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await rejectUnauthenticated(req);
+  if (denied) return denied;
+
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey || apiKey.trim() === "" || apiKey === "your_openai_api_key_here") {
@@ -24,7 +28,8 @@ export async function GET() {
         voice: "coral",
         instructions:
           "You are Edith, the product guide for Pixel (Linear Simplified). Speak naturally, concisely, and conversationally like a human product manager."
-      })
+      }),
+      signal: AbortSignal.timeout(10_000)
     });
 
     if (!response.ok) {

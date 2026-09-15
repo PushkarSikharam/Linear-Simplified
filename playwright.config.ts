@@ -1,7 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const apiPort = 8101;
-const webPort = 3000;
+const webPort = 3100;
 const webBaseUrl = `http://localhost:${webPort}`;
 
 export default defineConfig({
@@ -22,11 +21,12 @@ export default defineConfig({
       cwd: "apps/web",
       env: {
         ...process.env,
+        PIXEL_TEST_BUILD: "1",
         NEXT_PUBLIC_API_BASE_URL: "/api/agent"
       },
       timeout: 120_000,
       url: webBaseUrl,
-      reuseExistingServer: true
+      reuseExistingServer: false
     }
   ],
   projects: [

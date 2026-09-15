@@ -13,14 +13,41 @@ def utc_now() -> str:
 
 
 class SessionManager:
-    def ensure_session(self, session_id: str, product_id: str) -> None:
+    def ensure_session(
+        self,
+        session_id: str,
+        product_id: str,
+        user_id: str | None = None,
+        customer_id: str | None = None,
+        scope_id: str | None = None,
+    ) -> bool:
+        """Create or reuse a session. Returns False if it belongs to someone else.
+
+        Callers without a user (internal tools, unit tests) skip the ownership check;
+        API routes always pass the authenticated user.
+        """
         with get_connection() as connection:
+            connection.execute("begin immediate")
             existing = connection.execute(
-                "select id from sessions where id = ?",
+                "select product_id from sessions where id = ?",
                 (session_id,),
             ).fetchone()
             if existing:
-                return
+                if existing["product_id"] != product_id:
+                    return False
+                if user_id is None:
+                    return True
+                owner = connection.execute(
+                    "select user_id, customer_id from conversation_owners where session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if owner is None or (owner["user_id"], owner["customer_id"]) != (user_id, customer_id):
+                    return False
+                connection.execute(
+                    "update conversation_owners set scope_id = ? where session_id = ?",
+                    (scope_id or "", session_id),
+                )
+                return True
 
             connection.execute(
                 """
@@ -33,6 +60,23 @@ class SessionManager:
                 "insert into visitor_context(session_id) values (?)",
                 (session_id,),
             )
+            if user_id is not None:
+                connection.execute(
+                    """
+                    insert into conversation_owners(session_id, user_id, customer_id, product_id, scope_id)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (session_id, user_id, customer_id or "", product_id, scope_id or ""),
+                )
+            return True
+
+    def owns_session(self, session_id: str, user_id: str, customer_id: str) -> bool:
+        with get_connection() as connection:
+            owner = connection.execute(
+                "select user_id, customer_id from conversation_owners where session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return bool(owner and (owner["user_id"], owner["customer_id"]) == (user_id, customer_id))
 
     def activate_turn(self, session_id: str, turn_id: int) -> bool:
         with get_connection() as connection:
@@ -57,19 +101,11 @@ class SessionManager:
 
     def cancel_turn(self, session_id: str, turn_id: int) -> bool:
         with get_connection() as connection:
-            row = connection.execute(
-                "select active_turn_id from sessions where id = ?",
-                (session_id,),
-            ).fetchone()
-
-            if not row or row["active_turn_id"] != turn_id:
-                return False
-
-            connection.execute(
-                "update sessions set active_turn_id = null where id = ?",
-                (session_id,),
+            cursor = connection.execute(
+                "update sessions set active_turn_id = null where id = ? and active_turn_id = ?",
+                (session_id, turn_id),
             )
-            return True
+            return cursor.rowcount == 1
 
     def complete_turn(self, session_id: str, turn_id: int) -> None:
         with get_connection() as connection:

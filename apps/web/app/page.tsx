@@ -16,7 +16,9 @@ import {
   integrations
 } from "@/lib/demo-data";
 import {
+  ensureDemoLogin,
   loadDemoData,
+  RecordSaveError,
   resetStoredDemoData,
   saveStoredCycle,
   saveStoredIssue,
@@ -25,6 +27,7 @@ import {
   updateStoredIssue
 } from "@/lib/product-data-api";
 import { productConfig } from "@/lib/product-config";
+import { useRecordSubmit, type CreateRecord } from "@/lib/use-record-submit";
 import { HybridVoiceEngine, VoiceEngineMode, VoiceEngineStatus } from "@/lib/hybrid-voice-engine";
 import type { SpectrumData } from "@/lib/voice-analyzer";
 import type {
@@ -213,13 +216,14 @@ export default function Home() {
   );
   const latestEvent = uiEvents[0];
   const [dismissedEventId, setDismissedEventId] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    loadDemoData()
+  function loadStoredData(isCurrent: () => boolean = () => true) {
+    setDataError(null);
+    return ensureDemoLogin()
+      .then(() => loadDemoData())
       .then((demoData) => {
-        if (!isMounted) return;
+        if (!isCurrent()) return;
         setIssues(demoData.issues);
         setProjects(demoData.projects);
         setCycles(demoData.cycles);
@@ -231,8 +235,17 @@ export default function Home() {
             ?? demoWorkspaceScope;
         });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!isCurrent()) return;
+        setDataError(
+          "Could not load saved workspace data. You are seeing sample data, and changes will not be saved until it loads."
+        );
+      });
+  }
 
+  useEffect(() => {
+    let isMounted = true;
+    void loadStoredData(() => isMounted);
     return () => {
       isMounted = false;
     };
@@ -278,7 +291,7 @@ export default function Home() {
     });
   }
 
-  function runAction(action: DemoAction) {
+  function applyAction(action: DemoAction) {
     if (action.type === "OPEN_SYSTEM_ARCHITECTURE") {
       recordUiEvent({
         id: crypto.randomUUID(),
@@ -291,34 +304,39 @@ export default function Home() {
       return;
     }
 
-    setUiState((currentState) => {
-      const nextIssues =
+    const nextIssues =
         action.type === "CREATE_DEMO_ISSUE"
           ? upsertIssue(issues, withScopedIssue(action.payload, scopedProjects, workspaceScope))
           : action.type === "UPDATE_DEMO_ISSUE"
             ? applyIssueUpdate(issues, action.payload)
           : issues;
-      const scopedNextIssues = filterIssuesByScope(nextIssues, workspaceScope);
-      const result = executeDemoAction(currentState, action, { issues: scopedNextIssues });
+    const scopedNextIssues = filterIssuesByScope(nextIssues, workspaceScope);
+    const result = executeDemoAction(uiState, action, { issues: scopedNextIssues });
       if (
         (action.type === "CREATE_DEMO_ISSUE" || action.type === "UPDATE_DEMO_ISSUE")
         && result.event.status === "executed"
       ) {
         setIssues(nextIssues);
-        const changedIssue =
-          action.type === "CREATE_DEMO_ISSUE"
-            ? withScopedIssue(action.payload, scopedProjects, workspaceScope)
-            : nextIssues.find((issue) => issue.id === action.payload.issue_id);
-        if (changedIssue) {
-          const persistIssue =
-            action.type === "CREATE_DEMO_ISSUE" ? saveStoredIssue : updateStoredIssue;
-          void persistIssue(changedIssue).catch(() => undefined);
-        }
       }
       const visibleEvent = savedWorkspaceEvent(result.event, workspaceScope.name, action, nextIssues);
       setUiEvents((events) => [visibleEvent, ...events].slice(0, 6));
-      return result.nextState;
-    });
+    setUiState(result.nextState);
+  }
+
+  async function runAction(action: DemoAction): Promise<void> {
+    if (action.type === "CREATE_DEMO_ISSUE") {
+      const saved = await saveStoredIssue(
+        withScopedIssue(action.payload, scopedProjects, workspaceScope), crypto.randomUUID()
+      );
+      applyAction({ ...action, payload: saved });
+      return;
+    }
+    if (action.type === "UPDATE_DEMO_ISSUE") {
+      const changed = applyIssueUpdate(issues, action.payload).find((issue) => issue.id === action.payload.issue_id);
+      if (!changed) throw new Error("This ticket is no longer available.");
+      await updateStoredIssue(changed);
+    }
+    applyAction(action);
   }
 
   function recordUiEvent(event: UiEvent) {
@@ -361,11 +379,13 @@ export default function Home() {
         setWorkspaceScopes(demoData.workspaceScopes);
         setWorkspaceScope(demoData.workspaceScopes[0] ?? demoWorkspaceScope);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        setDataError("Reset failed, so saved workspace data was not restored. Retry to reload what is saved.");
+      });
   }
 
-  function createIssue(issue: DemoIssue) {
-    const scopedIssue = withScopedIssue(issue, scopedProjects, workspaceScope);
+  async function createIssue(issue: DemoIssue, requestKey: string) {
+    const scopedIssue = await saveStoredIssue(withScopedIssue(issue, scopedProjects, workspaceScope), requestKey);
     const nextIssues = upsertIssue(issues, scopedIssue);
     setIssues(nextIssues);
     setDraftPrefill((currentPrefill) => ({
@@ -373,19 +393,17 @@ export default function Home() {
       issue: undefined,
       issueUpdate: undefined
     }));
-    runAction({ type: "CREATE_DEMO_ISSUE", payload: scopedIssue });
-    void saveStoredIssue(scopedIssue).catch(() => undefined);
+    applyAction({ type: "CREATE_DEMO_ISSUE", payload: scopedIssue });
   }
 
-  function createTeamMember(member: DemoTeamMember) {
+  async function createTeamMember(member: DemoTeamMember, requestKey: string) {
     const pendingIssueDraft = draftPrefill.issue;
     const pendingIssueUpdate = draftPrefill.issueUpdate;
-    const scopedMember = {
+    const scopedMember = await saveStoredTeamMember({
       ...member,
       projectIds: member.projectIds ?? [...workspaceScope.allowedProjectIds]
-    };
+    }, workspaceScope.id, requestKey);
     setTeam((currentTeam) => [...currentTeam, scopedMember]);
-    void saveStoredTeamMember(scopedMember, workspaceScope.id).catch(() => undefined);
     setDraftPrefill((currentPrefill) => ({
       ...currentPrefill,
       teamMember: undefined,
@@ -406,7 +424,7 @@ export default function Home() {
           priority: pendingIssueUpdate.priority ?? issue.priority,
           status: pendingIssueUpdate.status ?? issue.status
         };
-        updateIssue(updatedIssue);
+        await updateIssue(updatedIssue);
         setDraftPrefill({});
         setUiState((currentState) => ({
           ...currentState,
@@ -447,11 +465,11 @@ export default function Home() {
     });
   }
 
-  function updateIssue(updatedIssue: DemoIssue) {
+  async function updateIssue(updatedIssue: DemoIssue) {
+    updatedIssue = await updateStoredIssue(updatedIssue);
     setIssues((currentIssues) =>
       currentIssues.map((item) => (item.id === updatedIssue.id ? updatedIssue : item))
     );
-    void updateStoredIssue(updatedIssue).catch(() => undefined);
     recordUiEvent({
       id: crypto.randomUUID(),
       action_type: "UPDATE_DEMO_ISSUE",
@@ -461,14 +479,14 @@ export default function Home() {
     });
   }
 
-  function createProject(project: DemoProject) {
+  async function createProject(project: DemoProject, requestKey: string) {
+    project = await saveStoredProject(project, workspaceScope.id, requestKey);
     setProjects((currentProjects) => [project, ...currentProjects]);
     const nextScope = addProjectToScope(workspaceScope, project);
     setWorkspaceScope(nextScope);
     setWorkspaceScopes((currentScopes) =>
       currentScopes.map((scope) => (scope.id === workspaceScope.id ? nextScope : scope))
     );
-    void saveStoredProject(project, workspaceScope.id).catch(() => undefined);
     setUiState((currentState) => ({
       ...currentState,
       current_page: "projects",
@@ -484,17 +502,16 @@ export default function Home() {
     });
   }
 
-  function createCycle(cycle: DemoCycle) {
-    const scopedCycle = {
+  async function createCycle(cycle: DemoCycle, requestKey: string) {
+    const scopedCycle = await saveStoredCycle({
       ...cycle,
       projectId: cycle.projectId ?? workspaceScope.allowedProjectIds[0]
-    };
+    }, requestKey);
     setCycles((currentCycles) => [scopedCycle, ...currentCycles]);
-    void saveStoredCycle(scopedCycle).catch(() => undefined);
     setUiState((currentState) => ({
       ...currentState,
       current_page: "cycles",
-      highlighted_target: `cycle_${cycle.id}`,
+      highlighted_target: `cycle_${scopedCycle.id}`,
       issue_filter_assignee: undefined
     }));
     recordUiEvent({
@@ -531,7 +548,7 @@ export default function Home() {
       return localDraftResponse;
     }
 
-    const localConversationResponse = handleLocalConversationIntent(trimmedMessage, inputMode);
+    const localConversationResponse = await handleLocalConversationIntent(trimmedMessage, inputMode);
     if (localConversationResponse) {
       return localConversationResponse;
     }
@@ -575,11 +592,6 @@ export default function Home() {
 
       setIntentTrace(result.intent_trace);
       setSessionSummary(result.session_summary);
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        { speaker: "Agent", text: result.speech }
-      ]);
-
       const validatedAction = result.validated_action;
       if (validatedAction) {
         if (validatedAction.type === "HIGHLIGHT_ADD_MEMBER_BUTTON") {
@@ -598,7 +610,7 @@ export default function Home() {
               : currentPrefill.issue
           }));
         }
-        runAction(validatedAction);
+        await runAction(validatedAction);
       } else if (result.proposed_action) {
         recordUiEvent({
           id: crypto.randomUUID(),
@@ -609,24 +621,32 @@ export default function Home() {
         });
       }
 
+      if (activeTurnIdRef.current !== turnId) return null;
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        { speaker: "Agent", text: result.speech }
+      ]);
       setTurnStatus(result.status === "denied" ? "Action blocked" : "Ready");
       return result;
-    } catch {
+    } catch (error) {
       if (activeTurnIdRef.current !== turnId) {
         return null;
       }
 
+      // A failed record write reports why it failed; anything else is a transport failure.
+      const saveMessage = error instanceof RecordSaveError ? error.message : null;
       setTurnStatus("Action blocked");
       setIntentTrace((currentTrace) => ({
         ...currentTrace,
         status: "denied",
-        reason: "The frontend could not reach the backend turn API."
+        reason: saveMessage ?? "The frontend could not reach the backend turn API."
       }));
       setMessages((currentMessages) => [
         ...currentMessages,
         {
           speaker: "Agent",
-          text: "I could not reach the demo agent service. Please check that the backend is running."
+          text: saveMessage
+            ?? "I could not reach the demo agent service. Please check that the backend is running."
         }
       ]);
       recordUiEvent({
@@ -759,23 +779,28 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
     });
   }
 
-  function handleLocalConversationIntent(
+  async function handleLocalConversationIntent(
     message: string,
     inputMode: InputMode
-  ): AgentTurnResponse | null {
+  ): Promise<AgentTurnResponse | null> {
     const text = normalizeText(message);
     const turnId = nextTurnIdRef.current;
-    const sayAndReturn = (speech: string, action: DemoAction | null = null) => {
+    const sayAndReturn = async (speech: string, action: DemoAction | null = null) => {
       nextTurnIdRef.current += 1;
+      if (action) {
+        try {
+          await runAction(action);
+        } catch (error) {
+          speech = error instanceof Error ? error.message : "I couldn't save that change. Please try again.";
+          action = null;
+        }
+      }
       setMessages((currentMessages) => [
         ...currentMessages,
         { speaker: "Visitor", text: message },
         { speaker: "Agent", text: speech }
       ]);
       setTurnStatus("Ready");
-      if (action) {
-        runAction(action);
-      }
       return localTurnResponse({
         action,
         message: speech,
@@ -955,14 +980,6 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
       priority: updateDraft.priority ?? issue.priority,
       status: updateDraft.status ?? issue.status
     };
-    updateIssue(updatedIssue);
-    setUiState((currentState) => ({
-      ...currentState,
-      current_page: "issue_detail",
-      selected_issue_id: issue.id,
-      highlighted_target: "updated_issue",
-      issue_filter_assignee: undefined
-    }));
     const changes = describeIssueChanges(issue, updatedIssue);
     return sayAndReturn(`Done. I updated ${issue.id}: ${changes}.`, {
       type: "UPDATE_DEMO_ISSUE",
@@ -1002,6 +1019,14 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
 
   return (
     <main className={isAssistantCollapsed ? "app-shell assistant-collapsed" : "app-shell"}>
+      {dataError && (
+        <div className="data-error-banner" data-testid="data-error" role="alert">
+          <span>{dataError}</span>
+          <button className="secondary-button compact" onClick={() => void loadStoredData()} type="button">
+            Retry
+          </button>
+        </div>
+      )}
       {latestEvent && dismissedEventId !== latestEvent.id && (
         <ActivityPopup
           event={latestEvent}
@@ -1126,10 +1151,10 @@ function ProductSurface({
   updateIssue,
   workspaceScope
 }: {
-  createCycle: (cycle: DemoCycle) => void;
-  createIssue: (issue: DemoIssue) => void;
-  createProject: (project: DemoProject) => void;
-  createTeamMember: (member: DemoTeamMember) => void;
+  createCycle: CreateRecord<DemoCycle>;
+  createIssue: CreateRecord<DemoIssue>;
+  createProject: CreateRecord<DemoProject>;
+  createTeamMember: CreateRecord<DemoTeamMember>;
   cycles: DemoCycle[];
   draftPrefill: DraftPrefill;
   issues: DemoIssue[];
@@ -1137,7 +1162,7 @@ function ProductSurface({
   team: DemoTeamMember[];
   uiState: SessionUiState;
   runAction: (action: DemoAction) => void;
-  updateIssue: (issue: DemoIssue) => void;
+  updateIssue: (issue: DemoIssue) => Promise<void>;
   workspaceScope: DemoWorkspaceScope;
 }) {
   if (uiState.current_page === "issues") {
@@ -1368,7 +1393,7 @@ function IssuesView({
   team
 }: {
   assigneeFilter?: string;
-  createIssue: (issue: DemoIssue) => void;
+  createIssue: CreateRecord<DemoIssue>;
   cycles: DemoCycle[];
   draftPrefill?: DraftPrefill["issue"];
   highlightedTarget?: string;
@@ -1425,8 +1450,8 @@ function IssuesView({
             cycles={cycles}
             issues={issues}
             onCancel={() => setIsCreating(false)}
-            onCreate={(issue) => {
-              createIssue(issue);
+            onCreate={async (issue, requestKey) => {
+              await createIssue(issue, requestKey);
               setIsCreating(false);
             }}
             projects={projects}
@@ -1452,11 +1477,12 @@ function IssueCreatePanel({
   cycles: DemoCycle[];
   issues: DemoIssue[];
   onCancel: () => void;
-  onCreate: (issue: DemoIssue) => void;
+  onCreate: CreateRecord<DemoIssue>;
   prefill?: DraftPrefill["issue"];
   projects: DemoProject[];
   team: DemoTeamMember[];
 }) {
+  const submission = useRecordSubmit<DemoIssue>();
   const [title, setTitle] = useState(prefill?.title ?? "Investigate customer onboarding issue");
   const [assignee, setAssignee] = useState(prefill?.assignee ?? team[0]?.name ?? "Maya Chen");
   const [priority, setPriority] = useState<DemoIssue["priority"]>(prefill?.priority ?? "Medium");
@@ -1481,8 +1507,8 @@ function IssueCreatePanel({
     const trimmedTitle = title.trim();
     if (!trimmedTitle) return;
 
-    onCreate({
-      id: nextDemoIssueId(issues),
+    void submission.submit({
+      id: "",
       title: trimmedTitle,
       priority,
       assignee,
@@ -1492,11 +1518,13 @@ function IssueCreatePanel({
       estimate,
       label,
       description: description.trim()
-    });
+    }, onCreate);
   }
 
   return (
     <form className="creation-panel" data-testid="issue-create-panel" onSubmit={handleSubmit}>
+      {submission.error && <p className="form-error" role="alert">{submission.error}</p>}
+      <fieldset className="creation-fields" disabled={submission.saving}>
       <div className="creation-header">
         <div>
           <p className="section-kicker">New Ticket</p>
@@ -1599,6 +1627,7 @@ function IssueCreatePanel({
           <textarea onChange={(event) => setDescription(event.target.value)} value={description} />
         </label>
       </div>
+      </fieldset>
     </form>
   );
 }
@@ -1611,12 +1640,14 @@ function IssueDetailView({
   uiState
 }: {
   issues: DemoIssue[];
-  onUpdateIssue: (issue: DemoIssue) => void;
+  onUpdateIssue: (issue: DemoIssue) => Promise<void>;
   runAction: (action: DemoAction) => void;
   team: DemoTeamMember[];
   uiState: SessionUiState;
 }) {
   const selectedIssueId = uiState.selected_issue_id ?? "LIN-142";
+  const edit = useRecordSubmit<DemoIssue>();
+  const saveEdit = (issue: DemoIssue) => edit.submit(issue, onUpdateIssue);
   const issue = issues.find((item) => item.id === selectedIssueId) ?? issues[0] ?? demoIssues[0];
   const isAssignmentHighlighted =
     uiState.highlighted_target === "assignment_control" ||
@@ -1627,6 +1658,7 @@ function IssueDetailView({
   return (
     <div className="surface-stack">
       <article className="panel" data-testid="issue-detail-panel">
+        {edit.error && <p className="form-error" role="alert">{edit.error}</p>}
         <div className="panel-header">
           <div>
             <p className="section-kicker">Issue Detail</p>
@@ -1685,7 +1717,8 @@ function IssueDetailView({
               <select
                 className="property-select"
                 data-testid="assignee-select"
-                onChange={(event) => onUpdateIssue({ ...issue, assignee: event.target.value })}
+                disabled={edit.saving}
+                onChange={(event) => void saveEdit({ ...issue, assignee: event.target.value })}
                 value={issue.assignee}
               >
                 {team.map((member) => (
@@ -1705,8 +1738,9 @@ function IssueDetailView({
               <select
                 className="property-select"
                 onChange={(event) =>
-                  onUpdateIssue({ ...issue, priority: event.target.value as DemoIssue["priority"] })
+                  void saveEdit({ ...issue, priority: event.target.value as DemoIssue["priority"] })
                 }
+                disabled={edit.saving}
                 value={issue.priority}
               >
                 {priorities.map((item) => (
@@ -1720,7 +1754,8 @@ function IssueDetailView({
               <span>Status</span>
               <select
                 className="property-select"
-                onChange={(event) => onUpdateIssue({ ...issue, status: event.target.value })}
+                onChange={(event) => void saveEdit({ ...issue, status: event.target.value })}
+                disabled={edit.saving}
                 value={issue.status}
               >
                 {issueStatuses.map((item) => (
@@ -1757,7 +1792,7 @@ function ProjectsView({
   team,
   workspaceScope
 }: {
-  createProject: (project: DemoProject) => void;
+  createProject: CreateRecord<DemoProject>;
   highlightedTarget?: string;
   projects: DemoProject[];
   team: DemoTeamMember[];
@@ -1793,8 +1828,8 @@ function ProjectsView({
         {isCreating && (
           <ProjectCreatePanel
             onCancel={() => setIsCreating(false)}
-            onCreate={(project) => {
-              createProject(project);
+            onCreate={async (project, requestKey) => {
+              await createProject(project, requestKey);
               setIsCreating(false);
             }}
             members={team}
@@ -1847,10 +1882,11 @@ function ProjectCreatePanel({
   members
 }: {
   onCancel: () => void;
-  onCreate: (project: DemoProject) => void;
+  onCreate: CreateRecord<DemoProject>;
   projects: DemoProject[];
   members: DemoTeamMember[];
 }) {
+  const submission = useRecordSubmit<DemoProject>();
   const [name, setName] = useState("Design System V2");
   const [description, setDescription] = useState(
     "Standardize dynamic tokens, accessible dark mode components, and responsive grid patterns across the product."
@@ -1866,16 +1902,8 @@ function ProjectCreatePanel({
     const trimmedName = name.trim();
     if (!trimmedName) return;
 
-    const nextIdNumber =
-      Math.max(
-        ...projects
-          .map((p) => Number(p.id.match(/\d+/)?.[0]))
-          .filter(Number.isFinite),
-        100
-      ) + 1;
-
-    onCreate({
-      id: `PRJ-${nextIdNumber}`,
+    void submission.submit({
+      id: "",
       name: trimmedName,
       description: description.trim() || "No description provided.",
       progress,
@@ -1883,11 +1911,13 @@ function ProjectCreatePanel({
       lead,
       team: teamName,
       targetDate
-    });
+    }, onCreate);
   }
 
   return (
     <form className="creation-panel" data-testid="project-create-panel" onSubmit={handleSubmit}>
+      {submission.error && <p className="form-error" role="alert">{submission.error}</p>}
+      <fieldset className="creation-fields" disabled={submission.saving}>
       <div className="creation-header">
         <div>
           <p className="section-kicker">New Project</p>
@@ -1967,6 +1997,7 @@ function ProjectCreatePanel({
           />
         </label>
       </div>
+      </fieldset>
     </form>
   );
 }
@@ -1977,7 +2008,7 @@ function CyclesView({
   highlightedTarget,
   workspaceScope
 }: {
-  createCycle: (cycle: DemoCycle) => void;
+  createCycle: CreateRecord<DemoCycle>;
   cycles: DemoCycle[];
   highlightedTarget?: string;
   workspaceScope: DemoWorkspaceScope;
@@ -2013,8 +2044,8 @@ function CyclesView({
           <CycleCreatePanel
             cycles={cycles}
             onCancel={() => setIsCreating(false)}
-            onCreate={(cycle) => {
-              createCycle(cycle);
+            onCreate={async (cycle, requestKey) => {
+              await createCycle(cycle, requestKey);
               setIsCreating(false);
             }}
           />
@@ -2068,8 +2099,9 @@ function CycleCreatePanel({
 }: {
   cycles: DemoCycle[];
   onCancel: () => void;
-  onCreate: (cycle: DemoCycle) => void;
+  onCreate: CreateRecord<DemoCycle>;
 }) {
+  const submission = useRecordSubmit<DemoCycle>();
   const [name, setName] = useState("Frontend Cycle 15");
   const [status, setStatus] = useState<DemoCycle["status"]>("Active");
   const [team, setTeam] = useState("Product Engineering");
@@ -2099,22 +2131,14 @@ function CycleCreatePanel({
     const trimmedName = name.trim();
     if (!trimmedName) return;
 
-    const nextIdNumber =
-      Math.max(
-        ...cycles
-          .map((c) => Number(c.id.match(/\d+/)?.[0]))
-          .filter(Number.isFinite),
-        14
-      ) + 1;
-
     const endMs = new Date(endDate).getTime();
     const nowMs = Date.now();
     const daysLeft = Math.max(0, Math.ceil((endMs - nowMs) / (1000 * 60 * 60 * 24)));
 
-    onCreate({
-      id: `CYC-${nextIdNumber}`,
+    void submission.submit({
+      id: "",
       name: trimmedName,
-      daysLeft: daysLeft || 14,
+      daysLeft,
       progress: 0,
       completed: 0,
       inProgress: 0,
@@ -2124,11 +2148,13 @@ function CycleCreatePanel({
       team,
       startDate,
       endDate
-    });
+    }, onCreate);
   }
 
   return (
     <form className="creation-panel" data-testid="cycle-create-panel" onSubmit={handleSubmit}>
+      {submission.error && <p className="form-error" role="alert">{submission.error}</p>}
+      <fieldset className="creation-fields" disabled={submission.saving}>
       <div className="creation-header">
         <div>
           <p className="section-kicker">New Sprint / Cycle</p>
@@ -2223,6 +2249,7 @@ function CycleCreatePanel({
           </div>
         </div>
       </div>
+      </fieldset>
     </form>
   );
 }
@@ -2234,7 +2261,7 @@ function TeamsView({
   team,
   workspaceScope
 }: {
-  createTeamMember: (member: DemoTeamMember) => void;
+  createTeamMember: CreateRecord<DemoTeamMember>;
   draftPrefill?: DraftPrefill["teamMember"];
   highlightedTarget?: string;
   team: DemoTeamMember[];
@@ -2279,8 +2306,8 @@ function TeamsView({
         {isCreating && (
           <TeamMemberCreatePanel
             onCancel={() => setIsCreating(false)}
-            onCreate={(member) => {
-              createTeamMember(member);
+            onCreate={async (member, requestKey) => {
+              await createTeamMember(member, requestKey);
               setIsCreating(false);
             }}
             prefill={draftPrefill}
@@ -2317,9 +2344,10 @@ function TeamMemberCreatePanel({
   prefill
 }: {
   onCancel: () => void;
-  onCreate: (member: DemoTeamMember) => void;
+  onCreate: CreateRecord<DemoTeamMember>;
   prefill?: DraftPrefill["teamMember"];
 }) {
+  const submission = useRecordSubmit<DemoTeamMember>();
   const [name, setName] = useState(prefill?.name ?? "");
   const [initials, setInitials] = useState(initialsForName(prefill?.name ?? ""));
   const [email, setEmail] = useState(emailForName(prefill?.name ?? ""));
@@ -2338,17 +2366,19 @@ function TeamMemberCreatePanel({
     const trimmedName = name.trim();
     if (!trimmedName) return;
 
-    onCreate({
+    void submission.submit({
       name: trimmedName,
       initials: initials.trim().toUpperCase() || initialsForName(trimmedName),
       role,
       load: Number(load),
       email: email.trim() || emailForName(trimmedName)
-    });
+    }, onCreate);
   }
 
   return (
     <form className="creation-panel" data-testid="team-member-create-panel" onSubmit={handleSubmit}>
+      {submission.error && <p className="form-error" role="alert">{submission.error}</p>}
+      <fieldset className="creation-fields" disabled={submission.saving}>
       <div className="creation-header">
         <div>
           <p className="section-kicker">New Employee</p>
@@ -2420,6 +2450,7 @@ function TeamMemberCreatePanel({
           />
         </label>
       </div>
+      </fieldset>
     </form>
   );
 }

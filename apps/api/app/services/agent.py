@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app.auth import AuthUser
 from app.product_config import PRODUCTS_BY_ID
 from app.schemas import (
     IntentTrace,
@@ -30,7 +31,7 @@ from app.services.language_normalizer import normalize_for_intent
 from app.services.reasoning_policy import ReasoningPolicy
 from app.services.retriever import ProductRetriever, RetrievedDocument
 from app.services.session_manager import SessionManager
-from app.workspace_config import WORKSPACE_SCOPES_BY_ID, WorkspaceScope
+from app.workspace_config import get_workspace_scope, WorkspaceScope
 
 
 class DemoAgent:
@@ -45,7 +46,7 @@ class DemoAgent:
         self.conversation_manager = ConversationManager()
         self.retriever = ProductRetriever()
 
-    def handle_turn(self, request: TurnRequest) -> TurnResponse:
+    def handle_turn(self, request: TurnRequest, owner: AuthUser | None = None) -> TurnResponse:
         if request.product_id not in PRODUCTS_BY_ID:
             return self._denied_response(
                 request,
@@ -53,7 +54,7 @@ class DemoAgent:
                 reason="Denied because the requested product is not configured.",
             )
 
-        workspace_scope = WORKSPACE_SCOPES_BY_ID.get(request.workspace_scope_id)
+        workspace_scope = get_workspace_scope(request.workspace_scope_id)
         if workspace_scope is None:
             return self._denied_response(
                 request,
@@ -61,7 +62,18 @@ class DemoAgent:
                 reason="Denied because the requested workspace scope is not configured.",
             )
 
-        self.sessions.ensure_session(request.session_id, request.product_id)
+        if not self.sessions.ensure_session(
+            request.session_id,
+            request.product_id,
+            user_id=owner.user_id if owner else None,
+            customer_id=owner.customer_id if owner else None,
+            scope_id=request.workspace_scope_id,
+        ):
+            return self._denied_response(
+                request,
+                "This conversation belongs to someone else. Start a new session to continue.",
+                reason="Denied because the session is owned by another user or product.",
+            )
         if not self.sessions.activate_turn(request.session_id, request.turn_id):
             return self._stale_response(
                 request,
@@ -98,6 +110,12 @@ class DemoAgent:
                 clarification_pending=clarification.clarification_pending,
             )
             speech = clarification.speech
+            if not self.sessions.is_active_turn(request.session_id, request.turn_id):
+                return self._stale_response(
+                    request,
+                    proposed_action=None,
+                    reason="Discarded because this is no longer the active turn.",
+                )
             self.sessions.store_message(request.session_id, request.turn_id, "assistant", speech)
             self.sessions.complete_turn(request.session_id, request.turn_id)
             return TurnResponse(
@@ -259,6 +277,12 @@ class DemoAgent:
             confidence=0.68,
             status="active",
         )
+        if not self.sessions.is_active_turn(request.session_id, request.turn_id):
+            return self._stale_response(
+                request,
+                proposed_action=None,
+                reason="Discarded because this is no longer the active turn.",
+            )
         self.sessions.store_message(request.session_id, request.turn_id, "assistant", speech)
         self.sessions.complete_turn(request.session_id, request.turn_id)
         return TurnResponse(

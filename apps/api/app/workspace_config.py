@@ -34,3 +34,10 @@ WORKSPACE_SCOPES: tuple[WorkspaceScope, ...] = (
 
 WORKSPACE_SCOPES_BY_ID = {scope.id: scope for scope in WORKSPACE_SCOPES}
 DEFAULT_WORKSPACE_SCOPE_ID = "workspace-product-eng"
+
+
+def get_workspace_scope(scope_id: str) -> WorkspaceScope | None:
+    """Resolve a workspace from persisted storage, so newly created projects are included."""
+    from app.services.product_data_store import ProductDataStore
+
+    return ProductDataStore().workspace_scope(scope_id)

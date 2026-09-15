@@ -1,3 +1,4 @@
+import { authHeaders } from "@/lib/product-data-api";
 import { SpectrumData, VoiceAnalyzer } from "@/lib/voice-analyzer";
 
 export type VoiceEngineMode = "azure" | "gemini" | "webrtc" | "local" | "connecting";
@@ -57,7 +58,7 @@ export class HybridVoiceEngine {
 
     try {
       // Check session API endpoint for OpenAI key
-      const res = await fetch("/api/realtime-session");
+      const res = await fetch("/api/realtime-session", { headers: authHeaders() });
       const sessionData = (await res.json()) as {
         success: boolean;
         mode: string;
@@ -116,6 +117,11 @@ export class HybridVoiceEngine {
     this.isSpeakingSelf = true;
     this.cancelSpeech();
     this.pauseRecognition();
+    // Share speakOnly's abort controller and generation so cancelSpeech() also
+    // stops this fetch, and audio that arrives after a cancel is never played.
+    const gen = this.speakOnlyGen;
+    const controller = new AbortController();
+    this.speakOnlyAbort = controller;
 
     return new Promise<void>(async (resolve) => {
       let isFinished = false;
@@ -133,15 +139,18 @@ export class HybridVoiceEngine {
       // Give Microsoft Azure enough time to synthesize premium speech before falling back.
       // The fallback is intentionally visible in the UI so the demo never mislabels audio.
       try {
-        const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 8000);
         const res = await fetch("/api/tts", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify({ text }),
           signal: controller.signal
         });
         clearTimeout(timer);
+        if (gen !== this.speakOnlyGen) {
+          finish();
+          return;
+        }
 
         if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
           const engineType = res.headers.get("X-TTS-Engine");
@@ -152,6 +161,11 @@ export class HybridVoiceEngine {
           }
 
           const blob = await res.blob();
+          if (gen !== this.speakOnlyGen) {
+            finish();
+            return;
+          }
+          this.speakOnlyAbort = null;
           const audioUrl = URL.createObjectURL(blob);
           this.currentAudioUrl = audioUrl;
 
@@ -228,6 +242,10 @@ export class HybridVoiceEngine {
         // Cloud TTS unavailable or timed out — use browser voice
       }
 
+      if (gen !== this.speakOnlyGen) {
+        finish();
+        return;
+      }
       this.fallbackBrowserSpeech(text, finish, resumeListening);
     });
   }
@@ -316,7 +334,7 @@ export class HybridVoiceEngine {
 
       fetch("/api/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ text: normalized })
       })
         .then((res) => {
@@ -422,7 +440,7 @@ export class HybridVoiceEngine {
 
     fetch("/api/tts", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ text }),
       signal
     })

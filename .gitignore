@@ -6,6 +6,8 @@ __pycache__/
 dist/
 build/
 apps/api/data/*.sqlite3
+apps/api/data/backups/
+tmp/
 .env
 .env.local
 .env.*.local

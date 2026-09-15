@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from app.db import get_connection
-from app.workspace_config import WORKSPACE_SCOPES
+from app.workspace_config import WORKSPACE_SCOPES, WorkspaceScope
 
 
 API_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT = API_ROOT.parents[1]
 ISSUES_PATH = REPO_ROOT / "packages" / "shared" / "demo-data" / "issues.json"
+
+
+class RecordConflict(ValueError):
+    pass
+
+
+class RecordNotFound(ValueError):
+    pass
+
+
+class InvalidReference(ValueError):
+    pass
 
 
 SEED_PROJECTS: tuple[dict[str, Any], ...] = (
@@ -122,7 +135,48 @@ SEED_CYCLES: tuple[dict[str, Any], ...] = (
 
 
 class ProductDataStore:
-    def load(self) -> dict[str, list[dict[str, Any]]]:
+    def load(self, scope_ids: frozenset[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Load records; with scope_ids, only records inside those workspaces."""
+        data = self._load_all()
+        return data if scope_ids is None else _filter_to_scopes(data, scope_ids)
+
+    def workspace_scope(self, scope_id: str) -> WorkspaceScope | None:
+        self.seed_if_empty()
+        with get_connection() as connection:
+            row = connection.execute(
+                "select * from demo_workspace_scopes where id = ?", (scope_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            members = connection.execute("select name, project_ids from demo_team_members").fetchall()
+        project_ids = frozenset(json.loads(row["allowed_project_ids"]))
+        return WorkspaceScope(
+            row["id"],
+            row["name"],
+            row["description"],
+            project_ids,
+            frozenset(json.loads(row["allowed_issue_projects"])),
+            frozenset(member["name"] for member in members
+                      if project_ids.intersection(json.loads(member["project_ids"]))),
+        )
+
+    def get_issue(self, issue_id: str) -> dict[str, Any] | None:
+        self.seed_if_empty()
+        with get_connection() as connection:
+            row = connection.execute("select * from demo_issues where id = ?", (issue_id,)).fetchone()
+        return _issue_from_row(row) if row else None
+
+    def scopes_for_record(self, project_id: str | None, issue_project: str | None = None) -> set[str]:
+        """Workspaces that contain a record, by project ID or, failing that, issue project label."""
+        self.seed_if_empty()
+        with get_connection() as connection:
+            rows = connection.execute("select * from demo_workspace_scopes").fetchall()
+        if project_id:
+            return {row["id"] for row in rows if project_id in json.loads(row["allowed_project_ids"])}
+        return {row["id"] for row in rows
+                if issue_project and issue_project in json.loads(row["allowed_issue_projects"])}
+
+    def _load_all(self) -> dict[str, list[dict[str, Any]]]:
         self.seed_if_empty()
         with get_connection() as connection:
             return {
@@ -178,6 +232,7 @@ class ProductDataStore:
                 delete from demo_team_members;
                 delete from demo_projects;
                 delete from demo_workspace_scopes;
+                delete from mutation_receipts;
                 """
             )
 
@@ -208,49 +263,84 @@ class ProductDataStore:
 
         return self.load()
 
-    def save_issue(self, issue: dict[str, Any]) -> dict[str, Any]:
-        self.seed_if_empty()
-        with get_connection() as connection:
-            self._upsert_issue(connection, issue)
-        return issue
+    def save_issue(self, issue: dict[str, Any], request_key: str | None = None) -> dict[str, Any]:
+        return self._create_record("issue", issue, request_key=request_key)
 
     def update_issue(self, issue_id: str, issue: dict[str, Any]) -> dict[str, Any]:
         self.seed_if_empty()
         issue = {**issue, "id": issue_id}
         with get_connection() as connection:
+            connection.execute("begin immediate")
+            if not connection.execute("select 1 from demo_issues where id = ?", (issue_id,)).fetchone():
+                raise RecordNotFound("This ticket no longer exists.")
+            _check_references(connection, "issue", issue, creating=False)
             self._upsert_issue(connection, issue)
         return issue
 
-    def save_project(self, project: dict[str, Any], workspace_scope_id: str) -> dict[str, Any]:
-        self.seed_if_empty()
-        with get_connection() as connection:
-            self._upsert_project(connection, project)
-            _add_project_to_scope(connection, workspace_scope_id, project)
-        return project
+    def save_project(self, project: dict[str, Any], workspace_scope_id: str,
+                     request_key: str | None = None) -> dict[str, Any]:
+        return self._create_record("project", project, workspace_scope_id, request_key)
 
-    def save_cycle(self, cycle: dict[str, Any]) -> dict[str, Any]:
-        self.seed_if_empty()
-        with get_connection() as connection:
-            self._upsert_cycle(connection, cycle)
-        return cycle
+    def save_cycle(self, cycle: dict[str, Any], request_key: str | None = None) -> dict[str, Any]:
+        return self._create_record("cycle", cycle, request_key=request_key)
 
     def save_team_member(
         self,
         member: dict[str, Any],
         workspace_scope_id: str,
+        request_key: str | None = None,
     ) -> dict[str, Any]:
+        return self._create_record("member", member, workspace_scope_id, request_key)
+
+    def _create_record(self, kind: str, record: dict[str, Any],
+                       scope_id: str | None = None, request_key: str | None = None) -> dict[str, Any]:
         self.seed_if_empty()
+        table, key_column, prefix, writer = {
+            "issue": ("demo_issues", "id", "PIX", self._upsert_issue),
+            "project": ("demo_projects", "id", "PRJ", self._upsert_project),
+            "cycle": ("demo_cycles", "id", "CYC", self._upsert_cycle),
+            "member": ("demo_team_members", "name", None, self._upsert_member),
+        }[kind]
+        request_body = json.dumps([kind, scope_id, record], sort_keys=True)
+        record = dict(record)
         with get_connection() as connection:
-            scope = connection.execute(
-                "select allowed_project_ids from demo_workspace_scopes where id = ?",
-                (workspace_scope_id,),
-            ).fetchone()
-            project_ids = member.get("projectIds") or []
-            if not project_ids and scope:
-                project_ids = json.loads(scope["allowed_project_ids"])
-            member = {**member, "projectIds": project_ids}
-            self._upsert_member(connection, member)
-        return member
+            # Serialize allocation, duplicate checks, record writes and retry receipts.
+            connection.execute("begin immediate")
+            if request_key:
+                receipt = connection.execute(
+                    "select * from mutation_receipts where request_key = ?", (request_key,)
+                ).fetchone()
+                if receipt:
+                    if receipt["request_body"] != request_body:
+                        raise RecordConflict("This request key was already used for a different change.")
+                    return json.loads(receipt["response_body"])
+            if scope_id:
+                scope = connection.execute(
+                    "select * from demo_workspace_scopes where id = ?", (scope_id,)
+                ).fetchone()
+                if scope is None:
+                    raise RecordNotFound("This workspace no longer exists.")
+                if kind == "member" and not record.get("projectIds"):
+                    record["projectIds"] = json.loads(scope["allowed_project_ids"])
+            if prefix and not record.get("id"):
+                ids = connection.execute(f"select id from {table}").fetchall()
+                numbers = [int(match.group(1)) for row in ids
+                           if (match := re.search(r"-(\d+)$", row["id"]))]
+                record["id"] = f"{prefix}-{max(numbers, default=0) + 1}"
+            if connection.execute(
+                f"select 1 from {table} where {key_column} = ?", (record[key_column],)
+            ).fetchone():
+                raise RecordConflict(f"A {kind} with this identifier already exists. No records were changed.")
+            _check_references(connection, kind, record, creating=True)
+            writer(connection, record)
+            if kind == "project":
+                _add_project_to_scope(connection, scope_id, record)
+            if request_key:
+                connection.execute(
+                    "insert into mutation_receipts values (?, ?, ?)",
+                    (request_key, request_body, json.dumps(record)),
+                )
+        return record
 
     def _upsert_issue(self, connection, issue: dict[str, Any]) -> None:
         connection.execute(
@@ -443,6 +533,41 @@ def _issue_from_row(row) -> dict[str, Any]:
         "label": row["label"],
         "description": row["description"],
     }
+
+
+def _filter_to_scopes(
+    data: dict[str, list[dict[str, Any]]], scope_ids: frozenset[str]
+) -> dict[str, list[dict[str, Any]]]:
+    scopes = [scope for scope in data["workspaceScopes"] if scope["id"] in scope_ids]
+    project_ids = {project_id for scope in scopes for project_id in scope["allowedProjectIds"]}
+    issue_projects = {name for scope in scopes for name in scope["allowedIssueProjects"]}
+    return {
+        "workspaceScopes": scopes,
+        "projects": [project for project in data["projects"] if project["id"] in project_ids],
+        "team": [member for member in data["team"] if project_ids.intersection(member["projectIds"])],
+        "cycles": [cycle for cycle in data["cycles"] if cycle["projectId"] in project_ids],
+        "issues": [
+            issue for issue in data["issues"]
+            if (issue["projectId"] in project_ids if issue["projectId"] else issue["project"] in issue_projects)
+        ],
+    }
+
+
+def _check_references(connection, kind: str, record: dict[str, Any], creating: bool) -> None:
+    """Reject records pointing at projects or people that do not exist.
+
+    Assignees are only checked on create: seed data contains historical assignees
+    who are no longer team members, and editing those tickets must keep working.
+    """
+    project_id = record.get("projectId")
+    if kind in ("issue", "cycle") and project_id and not connection.execute(
+        "select 1 from demo_projects where id = ?", (project_id,)
+    ).fetchone():
+        raise InvalidReference(f"Project {project_id} does not exist.")
+    if kind == "issue" and creating and not connection.execute(
+        "select 1 from demo_team_members where name = ?", (record["assignee"],)
+    ).fetchone():
+        raise InvalidReference(f"{record['assignee']} is not a member of this team.")
 
 
 def _add_project_to_scope(connection, workspace_scope_id: str, project: dict[str, Any]) -> None:

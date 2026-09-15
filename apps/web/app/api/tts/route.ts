@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
+import { rejectUnauthenticated } from "@/lib/server-auth";
 
 type TtsBody = {
   text?: string;
@@ -20,6 +21,9 @@ const PLACEHOLDER_VALUES = new Set([
 ]);
 
 let geminiCooldownUntil = 0;
+
+// Per-provider deadline so one slow provider cannot hold the request open.
+const PROVIDER_TIMEOUT_MS = 10_000;
 
 function envValue(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -101,7 +105,8 @@ async function synthesizeWithAzure(text: string, config: AzureSpeechConfig): Pro
         "X-Microsoft-OutputFormat": config.outputFormat,
         "User-Agent": "Pixel-Edith-Demo"
       },
-      body: azureSsml(text, config.voiceName)
+      body: azureSsml(text, config.voiceName),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
     }
   );
 
@@ -115,7 +120,7 @@ async function synthesizeWithAzure(text: string, config: AzureSpeechConfig): Pro
   return new Response(audioBuffer, {
     headers: {
       "Content-Type": "audio/mpeg",
-      "Cache-Control": "public, max-age=3600",
+      "Cache-Control": "private, no-store",
       "X-TTS-Engine": "azure-speech",
       "X-TTS-Voice": config.voiceName
     }
@@ -181,7 +186,8 @@ async function synthesizeWithGemini(text: string, geminiKey: string): Promise<Re
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
     }
   );
 
@@ -205,7 +211,7 @@ async function synthesizeWithGemini(text: string, geminiKey: string): Promise<Re
   return new Response(new Uint8Array(wavBuffer), {
     headers: {
       "Content-Type": "audio/wav",
-      "Cache-Control": "public, max-age=3600",
+      "Cache-Control": "private, no-store",
       "X-TTS-Engine": "gemini-2.5-flash"
     }
   });
@@ -222,7 +228,8 @@ async function synthesizeWithOpenAi(text: string, openaiKey: string): Promise<Re
       model: "tts-1",
       voice: "coral",
       input: text
-    })
+    }),
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
   });
 
   if (!response.ok) return null;
@@ -231,13 +238,16 @@ async function synthesizeWithOpenAi(text: string, openaiKey: string): Promise<Re
   return new Response(audioBuffer, {
     headers: {
       "Content-Type": "audio/mpeg",
-      "Cache-Control": "public, max-age=3600",
+      "Cache-Control": "private, no-store",
       "X-TTS-Engine": "openai-tts"
     }
   });
 }
 
 export async function POST(req: Request) {
+  const denied = await rejectUnauthenticated(req);
+  if (denied) return denied;
+
   let body: TtsBody;
   try {
     body = await req.json();

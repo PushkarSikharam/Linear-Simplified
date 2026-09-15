@@ -1,7 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:net";
 import { expect, test, type Page } from "@playwright/test";
 
-const apiPort = 8101;
+let apiPort: number;
+let apiToken: string;
 const agentApiRoute = "**/api/agent/**";
 const agentTurnRoute = "**/api/agent/turn";
 const agentCancelTurnOneRoute = "**/api/agent/turn/1/cancel";
@@ -17,13 +22,34 @@ declare global {
 }
 
 let apiProcess: ChildProcess | null = null;
+let apiDataDir: string | null = null;
+const browserErrors = new WeakMap<Page, string[]>();
 
 test.beforeAll(async () => {
+  apiPort = await new Promise<number>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close();
+        reject(new Error("Could not reserve an E2E API port."));
+        return;
+      }
+      server.close(() => resolve(address.port));
+    });
+  });
+  apiDataDir = await mkdtemp(join(tmpdir(), "pixel-e2e-"));
   apiProcess = spawn(
     ".venv\\Scripts\\python",
-    ["-m", "uvicorn", "app.main:app", "--app-dir", "apps\\api", "--port", "8101"],
+    ["-m", "uvicorn", "app.main:app", "--app-dir", "apps\\api", "--port", String(apiPort)],
     {
       cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PIXEL_DB_PATH: join(apiDataDir, "demo.sqlite3"),
+        LLM_ENABLED: "false"
+      },
       stdio: "ignore",
       windowsHide: true
     }
@@ -31,34 +57,68 @@ test.beforeAll(async () => {
 
   apiProcess.unref();
   await waitForApi();
+
+  // Obtain an admin token for test-harness calls (reset, direct data reads).
+  const loginResponse = await fetch(`http://127.0.0.1:${apiPort}/api/auth/demo-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: "demo-admin" })
+  });
+  const loginBody = (await loginResponse.json()) as { token: string };
+  apiToken = loginBody.token;
 });
 
-test.afterAll(() => {
+test.afterAll(async () => {
   if (apiProcess?.exitCode === null) {
+    const exited = new Promise<void>((resolve) => apiProcess!.once("exit", () => resolve()));
     apiProcess.kill();
+    await exited;
   }
   apiProcess = null;
+  if (apiDataDir) {
+    await rm(apiDataDir, { recursive: true, force: true, maxRetries: 3 });
+    apiDataDir = null;
+  }
 });
 
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: "ignoreErrors" });
+  expect(browserErrors.get(page) ?? [], "Unexpected browser runtime errors").toEqual([]);
 });
 
 test.beforeEach(async ({ page }, testInfo) => {
-  await fetch(`http://127.0.0.1:${apiPort}/api/demo-data/reset`, { method: "POST" });
-  if (testInfo.title !== "shows a graceful chat error when the agent API cannot be reached") {
-    await proxyApiToFreshBackend(page);
-  }
+  const errors: string[] = [];
+  browserErrors.set(page, errors);
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("**/api/tts", (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "External speech is disabled in automated tests." })
+  }));
+  await page.route("**/api/realtime-session", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ success: false, mode: "local" })
+  }));
+  await fetch(`http://127.0.0.1:${apiPort}/api/demo-data/reset`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiToken}` }
+  });
+  await proxyApiToFreshBackend(page);
 });
 
 async function openApp(page: Page) {
   await page.addInitScript(() => {
+    try { window.sessionStorage?.removeItem("demo_auth_token"); } catch { /* ignore */ }
     window.__disableAutoGreetingSpeech = true;
     if (typeof window.__demoVoiceSilenceTimeoutMs !== "number") {
       window.__disableTextResponseSpeech = true;
     }
   });
+  const authDone = page.waitForResponse(
+    (resp) => resp.url().includes("/auth/demo-login") && resp.status() === 200
+  );
   await page.goto("/");
+  await authDone;
   await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
   await expect(page.getByTestId("chat-input")).toBeVisible();
   await expect(page.getByTestId("diagnostics-panel")).toBeHidden();
@@ -76,10 +136,25 @@ async function proxyApiToFreshBackend(page: Page) {
   });
 }
 
+async function proxyNonTurnToFreshBackend(page: Page) {
+  const nonTurnPattern = /\/api\/agent\/(?!turn)/;
+  await page.route(nonTurnPattern, async (route) => {
+    const request = route.request();
+    const response = await route.fetch({
+      url: freshBackendUrl(request.url())
+    });
+    await route.fulfill({ response });
+  });
+}
+
 function freshBackendUrl(requestUrl: string): string {
   const url = new URL(requestUrl);
   const backendPath = url.pathname.replace("/api/agent", "/api");
   return `http://127.0.0.1:${apiPort}${backendPath}${url.search}`;
+}
+
+function apiAuthHeaders(): Record<string, string> {
+  return { Authorization: `Bearer ${apiToken}` };
 }
 
 async function waitForApi() {
@@ -96,7 +171,7 @@ async function waitForApi() {
     }
   }
 
-  throw new Error("Timed out waiting for E2E API server on port 8101.");
+  throw new Error(`Timed out waiting for E2E API server on port ${apiPort}.`);
 }
 
 function delay(ms: number) {
@@ -175,6 +250,8 @@ async function installMockVoice(page: Page) {
     Object.defineProperty(testWindow, "speechSynthesis", {
       configurable: true,
       value: {
+        getVoices: () => [],
+        resume: () => undefined,
         cancel: () => {
           const utterance = testWindow.__activeUtterance;
           testWindow.__activeUtterance = undefined;
@@ -209,6 +286,89 @@ async function installMockVoice(page: Page) {
       });
       recognition.onend?.();
     };
+  });
+}
+
+test("phase 1 creates a ticket through the form with the selected owner", async ({ page }) => {
+  await openApp(page);
+  await page.getByTestId("nav-issues").click();
+  await page.getByTestId("create-ticket-button").click();
+  await page.getByTestId("ticket-title-input").fill("Audit form-created ticket");
+  await page.getByTestId("ticket-assignee-select").selectOption("Noah Patel");
+  const saved = page.waitForResponse((response) =>
+    response.url().endsWith("/demo-data/issues") && response.request().method() === "POST"
+  );
+  await page.getByTestId("submit-create-ticket").click();
+  expect((await saved).ok()).toBe(true);
+  await expect(page.getByTestId("issue-detail-panel")).toContainText("Audit form-created ticket");
+  await page.reload();
+  await page.getByTestId("nav-issues").click();
+  await expect(page.getByText("Audit form-created ticket", { exact: true })).toBeVisible();
+  const data = await (await fetch(`http://127.0.0.1:${apiPort}/api/demo-data`, { headers: apiAuthHeaders() })).json();
+  expect(data.issues.find((issue: { title: string }) => issue.title === "Audit form-created ticket").assignee)
+    .toBe("Noah Patel");
+});
+
+for (const entity of ["project", "cycle"] as const) {
+  test(`phase 1 creates and reloads a ${entity} without changing existing records`, async ({ page }) => {
+    const before = await (await fetch(`http://127.0.0.1:${apiPort}/api/demo-data`, { headers: apiAuthHeaders() })).json();
+    await openApp(page);
+    await page.getByTestId(`nav-${entity}s`).click();
+    await page.getByTestId(`create-${entity}-button`).click();
+    const name = `Audit ${entity}`;
+    await page.getByTestId(`${entity}-name-input`).fill(name);
+    const saved = page.waitForResponse((response) =>
+      response.url().includes(`/demo-data/${entity}s`) && response.request().method() === "POST"
+    );
+    await page.getByTestId(`submit-create-${entity}`).click();
+    expect((await saved).ok()).toBe(true);
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await page.reload();
+    await page.getByTestId(`nav-${entity}s`).click();
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+    const after = await (await fetch(`http://127.0.0.1:${apiPort}/api/demo-data`, { headers: apiAuthHeaders() })).json();
+    for (const previous of before[`${entity}s`]) {
+      expect(after[`${entity}s`].find((record: { id: string }) => record.id === previous.id)).toEqual(previous);
+    }
+  });
+}
+
+test("phase 1 failed saves do not report success", async ({ page }) => {
+  await openApp(page);
+  await page.getByTestId("nav-projects").click();
+  await page.getByTestId("create-project-button").click();
+  await page.getByTestId("project-name-input").fill("Unsaved audit project");
+  await page.route("**/api/agent/demo-data/projects?**", (route) => route.fulfill({
+    status: 503, contentType: "application/json", body: JSON.stringify({ error: "Unavailable" })
+  }));
+  const saved = page.waitForResponse((response) =>
+    response.url().includes("/demo-data/projects") && response.request().method() === "POST"
+  );
+  await page.getByTestId("submit-create-project").click();
+  expect((await saved).status()).toBe(503);
+  await expect(page.getByTestId("project-create-panel")).toBeVisible({ timeout: 1000 });
+  await expect(page.getByTestId("project-create-panel").getByRole("alert")).toContainText("Could not save");
+  await expect(page.getByTestId("project-name-input")).toHaveValue("Unsaved audit project");
+  await page.unroute("**/api/agent/demo-data/projects?**");
+  const retried = page.waitForResponse((response) =>
+    response.url().includes("/demo-data/projects") && response.request().method() === "POST"
+  );
+  await page.getByTestId("submit-create-project").click();
+  expect((await retried).ok()).toBe(true);
+  await expect(page.getByTestId("project-create-panel")).toBeHidden();
+});
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`phase 1 layout evidence at ${viewport.width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await openApp(page);
+    await page.screenshot({ path: testInfo.outputPath("dashboard.png"), fullPage: true });
+    await expect(page.getByTestId("chat-input")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.getByTestId("nav-issues").click();
+    await page.getByTestId("create-ticket-button").click();
+    await page.screenshot({ path: testInfo.outputPath("issue-form.png"), fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }
 
@@ -303,6 +463,7 @@ test("sends the selected workspace scope to the agent API", async ({ page }) => 
   let capturedWorkspaceScopeId = "";
 
   await page.unroute(agentApiRoute);
+  await proxyNonTurnToFreshBackend(page);
   await page.route(agentTurnRoute, async (route) => {
     const body = route.request().postDataJSON();
     capturedWorkspaceScopeId = body.workspace_scope_id;
@@ -648,6 +809,7 @@ test("uses voice transcripts as voice-mode turns through the same action pipelin
 }) => {
   await installMockVoice(page);
   await page.unroute(agentApiRoute);
+  await proxyNonTurnToFreshBackend(page);
   let sawVoiceMode = false;
 
   await page.route(agentTurnRoute, async (route) => {
@@ -677,6 +839,7 @@ test("uses voice transcripts as voice-mode turns through the same action pipelin
 test("waits for voice silence before sending the completed spoken turn", async ({ page }) => {
   await installMockVoice(page);
   await page.unroute(agentApiRoute);
+  await proxyNonTurnToFreshBackend(page);
   const voiceMessages: string[] = [];
 
   await page.route(agentTurnRoute, async (route) => {
@@ -805,6 +968,7 @@ test("turns agent speech into listening when the user presses voice", async ({ p
 test("stops agent speech and listens when the visitor presses voice during speech", async ({ page }) => {
   await installMockVoice(page);
   await page.unroute(agentApiRoute);
+  await proxyNonTurnToFreshBackend(page);
   const voiceMessages: string[] = [];
 
   await page.route(agentTurnRoute, async (route) => {
@@ -861,6 +1025,7 @@ test("opens integrations for GitHub and Slack, then blocks out-of-product reques
 
 test("cancels an active turn and ignores the delayed stale result", async ({ page }) => {
   await page.unroute(agentApiRoute);
+  await proxyNonTurnToFreshBackend(page);
   let turnRequestCount = 0;
   let releaseFirstTurn: () => void = () => undefined;
   const firstTurnCanContinue = new Promise<void>((resolve) => {

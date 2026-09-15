@@ -10,7 +10,7 @@ from app.services.demo_data import (
     load_demo_issues,
     team_member_in_scope,
 )
-from app.workspace_config import DEFAULT_WORKSPACE_SCOPE_ID, WORKSPACE_SCOPES_BY_ID, WorkspaceScope
+from app.workspace_config import DEFAULT_WORKSPACE_SCOPE_ID, get_workspace_scope, WorkspaceScope
 
 
 class ActionValidator:
@@ -30,7 +30,7 @@ class ActionValidator:
         if proposed_action.type not in product.allowed_actions:
             return None
 
-        workspace_scope = WORKSPACE_SCOPES_BY_ID.get(workspace_scope_id)
+        workspace_scope = get_workspace_scope(workspace_scope_id)
         if workspace_scope is None:
             return None
 

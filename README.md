@@ -8,6 +8,9 @@ Pixel is a scoped project workspace guided by Edith, a conversational demo agent
 
 [Full product architecture](docs/SYSTEM_ARCHITECTURE.md)
 
+[Phase 1 audit and migration baseline](docs/PHASE_1_BASELINE.md): verified behavior,
+known release blockers, test results, and ownership for the customer-isolation roadmap.
+
 Open **System architecture** in the workspace navigation, or visit `/architecture`, for the visual product walkthrough, control model and current boundaries.
 
 ```mermaid
@@ -25,8 +28,11 @@ The current product is a controlled adaptive demo. It supports scoped project wo
 Current phase:
 
 ```text
-Demo-ready MVP: product UI, controlled actions, chat wiring, retrieval context,
-session intelligence, interruption handling, browser voice input shell, and Azure TTS.
+Phase 1 complete: single-product demo baseline, stabilized and locked.
+Authentication, workspace authorization, record integrity, owned sessions and
+reliable saves are in place and covered by tests.
+Next: Phase 2, real sign-in and per-customer isolation. Demo identities are not
+real accounts, so this is not yet ready for private customer data.
 ```
 
 Run the frontend:

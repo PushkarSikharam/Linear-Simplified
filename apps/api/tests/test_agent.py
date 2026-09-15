@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import unittest
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -11,11 +13,37 @@ API_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(API_ROOT))
 
 from app import db
+from app.auth import create_token
 from app.main import app
 from app.schemas import IntentTrace, TurnRequest
 from app.services.agent import DemoAgent
 from app.services.agent_reasoner import AgentReasoningResult, ReasonedAction
 from app.services.session_manager import SessionManager
+
+
+class AuthenticatedTestClient:
+    """Wraps TestClient to inject auth headers into every request."""
+
+    def __init__(self, client: TestClient, token: str) -> None:
+        self._client = client
+        self._headers = {"Authorization": f"Bearer {token}"}
+
+    def _merge(self, kwargs: dict) -> dict:
+        headers = {**self._headers, **(kwargs.pop("headers", None) or {})}
+        kwargs["headers"] = headers
+        return kwargs
+
+    def get(self, url, **kwargs):
+        return self._client.get(url, **self._merge(kwargs))
+
+    def post(self, url, **kwargs):
+        return self._client.post(url, **self._merge(kwargs))
+
+    def put(self, url, **kwargs):
+        return self._client.put(url, **self._merge(kwargs))
+
+    def delete(self, url, **kwargs):
+        return self._client.delete(url, **self._merge(kwargs))
 
 
 class FakeGeminiReasoner:
@@ -35,10 +63,16 @@ class FakeGeminiReasoner:
 
 class AgentApiTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.env_patch = patch.dict(os.environ, {"LLM_ENABLED": "false"})
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
+        original_db_path = db.DB_PATH
+        self.addCleanup(setattr, db, "DB_PATH", original_db_path)
         self.temp_dir = tempfile.TemporaryDirectory()
         db.DB_PATH = Path(self.temp_dir.name) / "test.sqlite3"
         db.migrate()
-        self.client = TestClient(app)
+        token = create_token("demo-admin")
+        self.client = AuthenticatedTestClient(TestClient(app), token)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -1028,7 +1062,10 @@ class AgentApiTest(unittest.TestCase):
 
     def test_cancel_active_turn(self) -> None:
         sessions = SessionManager()
-        sessions.ensure_session("session_test", "linear_simplified")
+        # The API client is signed in as demo-admin, so the session must belong to that user.
+        sessions.ensure_session(
+            "session_test", "linear_simplified", user_id="demo-admin", customer_id="pixel-demo"
+        )
         self.assertTrue(sessions.activate_turn("session_test", 9))
 
         response = self.client.post(

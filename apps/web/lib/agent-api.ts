@@ -1,4 +1,5 @@
 import { productConfig } from "@/lib/product-config";
+import { authorizedFetch } from "@/lib/product-data-api";
 import type { DemoAction, DemoActionType, DemoIssue, IntentTrace } from "@/types/demo";
 
 const API_BASE_URL =
@@ -43,7 +44,7 @@ export async function sendAgentTurn(input: {
   selectedIssueId?: string;
 }): Promise<AgentTurnResponse> {
   const endpoint = apiEndpoint("turn");
-  const response = await fetch(endpoint, {
+  const response = await authorizedFetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -76,7 +77,7 @@ export async function cancelAgentTurn(input: {
   turnId: number;
 }): Promise<void> {
   const endpoint = apiEndpoint(`turn/${input.turnId}/cancel`);
-  const response = await fetch(endpoint, {
+  const response = await authorizedFetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"

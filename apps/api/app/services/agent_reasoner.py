@@ -195,8 +195,23 @@ class AgentReasoner:
         return {"projects": projects[:8], "team": team[:8], "issues": issues[:10]}
 
     def _parse_response(self, response: dict[str, Any]) -> AgentReasoningResult | None:
-        text = response.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-        if not isinstance(text, str):
+        if not isinstance(response, dict):
+            return None
+        candidates = response.get("candidates")
+        if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
+            return None
+        content = candidates[0].get("content")
+        if not isinstance(content, dict):
+            return None
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            return None
+        text = "".join(
+            part["text"] for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+            and not part.get("thought")
+        )
+        if not text:
             return None
 
         try:
@@ -210,6 +225,8 @@ class AgentReasoner:
             except json.JSONDecodeError:
                 return None
 
+        if not isinstance(raw, dict):
+            return None
         try:
             return AgentReasoningResult.model_validate(self._normalize_result(raw))
         except ValidationError:
@@ -220,7 +237,7 @@ class AgentReasoner:
         intent_trace = normalized.get("intent_trace")
         if isinstance(intent_trace, dict):
             normalized_trace = {**intent_trace}
-            if normalized_trace.get("status") not in {"active", "interrupted", "denied"}:
+            if normalized_trace.get("status") not in ("active", "interrupted", "denied"):
                 normalized_trace["status"] = "active"
 
             feature = normalized_trace.get("relevant_feature")
