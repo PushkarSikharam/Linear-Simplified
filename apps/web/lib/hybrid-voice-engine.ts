@@ -1,4 +1,4 @@
-import { authHeaders } from "@/lib/product-data-api";
+import { authorizedFetch } from "@/lib/product-data-api";
 import { SpectrumData, VoiceAnalyzer } from "@/lib/voice-analyzer";
 
 export type VoiceEngineMode = "azure" | "gemini" | "webrtc" | "local" | "connecting";
@@ -58,7 +58,7 @@ export class HybridVoiceEngine {
 
     try {
       // Check session API endpoint for OpenAI key
-      const res = await fetch("/api/realtime-session", { headers: authHeaders() });
+      const res = await authorizedFetch("/api/realtime-session");
       const sessionData = (await res.json()) as {
         success: boolean;
         mode: string;
@@ -140,9 +140,9 @@ export class HybridVoiceEngine {
       // The fallback is intentionally visible in the UI so the demo never mislabels audio.
       try {
         const timer = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch("/api/tts", {
+        const res = await authorizedFetch("/api/tts", {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text }),
           signal: controller.signal
         });
@@ -332,9 +332,9 @@ export class HybridVoiceEngine {
       const normalized = text.trim();
       if (!normalized || HybridVoiceEngine.ttsCache.has(normalized)) continue;
 
-      fetch("/api/tts", {
+      authorizedFetch("/api/tts", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: normalized })
       })
         .then((res) => {
@@ -438,9 +438,9 @@ export class HybridVoiceEngine {
       }
     }, 8000);
 
-    fetch("/api/tts", {
+    authorizedFetch("/api/tts", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
       signal
     })

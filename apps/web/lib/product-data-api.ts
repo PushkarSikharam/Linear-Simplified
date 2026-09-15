@@ -83,6 +83,8 @@ export async function authorizedFetch(url: string, init: RequestInit = {}): Prom
     ...init,
     headers: { ...(init.headers as Record<string, string> | undefined), ...authHeaders() }
   });
+  // Sign in before the first request, so calls made during startup are not rejected.
+  if (!getAuthToken()) await ensureDemoLogin();
   const response = await send();
   if (response.status !== 401) return response;
   setAuthToken(null);
