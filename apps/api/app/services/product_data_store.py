@@ -26,6 +26,10 @@ class InvalidReference(ValueError):
     pass
 
 
+class ScopeViolation(ValueError):
+    pass
+
+
 SEED_PROJECTS: tuple[dict[str, Any], ...] = (
     {
         "id": "PRJ-101",
@@ -271,9 +275,12 @@ class ProductDataStore:
         issue = {**issue, "id": issue_id}
         with get_connection() as connection:
             connection.execute("begin immediate")
-            if not connection.execute("select 1 from demo_issues where id = ?", (issue_id,)).fetchone():
+            existing = connection.execute(
+                "select * from demo_issues where id = ?", (issue_id,)
+            ).fetchone()
+            if existing is None:
                 raise RecordNotFound("This ticket no longer exists.")
-            _check_references(connection, "issue", issue, creating=False)
+            _check_references(connection, "issue", issue, previous_issue=_issue_from_row(existing))
             self._upsert_issue(connection, issue)
         return issue
 
@@ -320,8 +327,14 @@ class ProductDataStore:
                 ).fetchone()
                 if scope is None:
                     raise RecordNotFound("This workspace no longer exists.")
-                if kind == "member" and not record.get("projectIds"):
-                    record["projectIds"] = json.loads(scope["allowed_project_ids"])
+                if kind == "member":
+                    scope_project_ids = json.loads(scope["allowed_project_ids"])
+                    if not record.get("projectIds"):
+                        record["projectIds"] = scope_project_ids
+                    elif not set(record["projectIds"]) <= set(scope_project_ids):
+                        raise ScopeViolation(
+                            "Team members can only join projects in this workspace. No records were changed."
+                        )
             if prefix and not record.get("id"):
                 ids = connection.execute(f"select id from {table}").fetchall()
                 numbers = [int(match.group(1)) for row in ids
@@ -331,7 +344,7 @@ class ProductDataStore:
                 f"select 1 from {table} where {key_column} = ?", (record[key_column],)
             ).fetchone():
                 raise RecordConflict(f"A {kind} with this identifier already exists. No records were changed.")
-            _check_references(connection, kind, record, creating=True)
+            _check_references(connection, kind, record)
             writer(connection, record)
             if kind == "project":
                 _add_project_to_scope(connection, scope_id, record)
@@ -553,21 +566,55 @@ def _filter_to_scopes(
     }
 
 
-def _check_references(connection, kind: str, record: dict[str, Any], creating: bool) -> None:
-    """Reject records pointing at projects or people that do not exist.
+def _check_references(
+    connection, kind: str, record: dict[str, Any], previous_issue: dict[str, Any] | None = None
+) -> None:
+    """Reject records pointing at projects or people that do not exist or are out of scope.
 
-    Assignees are only checked on create: seed data contains historical assignees
-    who are no longer team members, and editing those tickets must keep working.
+    Historical assignees may remain on tickets only while both the assignee and
+    workspace membership are unchanged. Moving a ticket revalidates ownership.
     """
     project_id = record.get("projectId")
     if kind in ("issue", "cycle") and project_id and not connection.execute(
         "select 1 from demo_projects where id = ?", (project_id,)
     ).fetchone():
         raise InvalidReference(f"Project {project_id} does not exist.")
-    if kind == "issue" and creating and not connection.execute(
-        "select 1 from demo_team_members where name = ?", (record["assignee"],)
-    ).fetchone():
-        raise InvalidReference(f"{record['assignee']} is not a member of this team.")
+    if kind != "issue":
+        return
+
+    workspace_project_ids = _workspace_project_ids(connection, project_id, record["project"])
+    if previous_issue and record["assignee"] == previous_issue["assignee"]:
+        previous_workspace_project_ids = _workspace_project_ids(
+            connection, previous_issue.get("projectId"), previous_issue["project"]
+        )
+        if workspace_project_ids == previous_workspace_project_ids:
+            return
+
+    assignee = record["assignee"]
+    member = connection.execute(
+        "select project_ids from demo_team_members where name = ?", (assignee,)
+    ).fetchone()
+    if member is None:
+        raise InvalidReference(f"{assignee} is not a member of this team.")
+    if not workspace_project_ids.intersection(json.loads(member["project_ids"])):
+        raise InvalidReference(f"{assignee} does not work in this ticket's workspace.")
+
+
+def _workspace_project_ids(connection, project_id: str | None, issue_project: str) -> set[str]:
+    """Project IDs of every workspace containing the issue, matched by ID when it has one."""
+    project_ids: set[str] = set()
+    for row in connection.execute(
+        "select allowed_project_ids, allowed_issue_projects from demo_workspace_scopes"
+    ).fetchall():
+        scope_project_ids = json.loads(row["allowed_project_ids"])
+        contains = (
+            project_id in scope_project_ids
+            if project_id
+            else issue_project in json.loads(row["allowed_issue_projects"])
+        )
+        if contains:
+            project_ids.update(scope_project_ids)
+    return project_ids
 
 
 def _add_project_to_scope(connection, workspace_scope_id: str, project: dict[str, Any]) -> None:

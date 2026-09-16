@@ -2,8 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer as createHttpServer, type Server } from "node:http";
 import { createServer } from "node:net";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
+import { E2E_SENTINEL_PORT } from "./ports";
 
 let apiPort: number;
 let apiToken: string;
@@ -24,8 +26,20 @@ declare global {
 let apiProcess: ChildProcess | null = null;
 let apiDataDir: string | null = null;
 const browserErrors = new WeakMap<Page, string[]>();
+let sentinel: Server | null = null;
+const escapedRequests: string[] = [];
 
 test.beforeAll(async () => {
+  sentinel = createHttpServer((request, response) => {
+    escapedRequests.push(`${request.method} ${request.url}`);
+    response.writeHead(503, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ detail: "E2E sentinel: request escaped test isolation." }));
+  });
+  await new Promise<void>((resolve, reject) => {
+    sentinel!.once("error", reject);
+    sentinel!.listen(E2E_SENTINEL_PORT, "127.0.0.1", () => resolve());
+  });
+
   apiPort = await new Promise<number>((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
@@ -48,6 +62,7 @@ test.beforeAll(async () => {
       env: {
         ...process.env,
         PIXEL_DB_PATH: join(apiDataDir, "demo.sqlite3"),
+        PIXEL_SYNTHETIC_DEMO: "true",
         LLM_ENABLED: "false"
       },
       stdio: "ignore",
@@ -75,35 +90,42 @@ test.afterAll(async () => {
     await exited;
   }
   apiProcess = null;
+  await new Promise<void>((resolve) => (sentinel ? sentinel.close(() => resolve()) : resolve()));
+  sentinel = null;
   if (apiDataDir) {
     await rm(apiDataDir, { recursive: true, force: true, maxRetries: 3 });
     apiDataDir = null;
   }
 });
 
-test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: "ignoreErrors" });
+test.afterEach(async ({ page, context }) => {
+  // Context routes remain installed until every page has stopped issuing requests.
+  await context.close();
+  const escaped = escapedRequests.splice(0);
+  expect(escaped, "Requests escaped the isolated test backend").toEqual([]);
   expect(browserErrors.get(page) ?? [], "Unexpected browser runtime errors").toEqual([]);
 });
 
-test.beforeEach(async ({ page }, testInfo) => {
+test.beforeEach(async ({ page, context }) => {
   const errors: string[] = [];
   browserErrors.set(page, errors);
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("**/api/tts", (route) => route.fulfill({
+  await context.route("**/api/tts", (route) => route.fulfill({
     status: 503,
     contentType: "application/json",
     body: JSON.stringify({ error: "External speech is disabled in automated tests." })
   }));
-  await page.route("**/api/realtime-session", (route) => route.fulfill({
+  await context.route("**/api/realtime-session", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ success: false, mode: "local" })
   }));
-  await fetch(`http://127.0.0.1:${apiPort}/api/demo-data/reset`, {
+  const reset = await fetch(`http://127.0.0.1:${apiPort}/api/demo-data/reset`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiToken}` }
   });
-  await proxyApiToFreshBackend(page);
+  expect(reset.ok).toBe(true);
+  await reset.arrayBuffer();
+  await context.route(agentApiRoute, forwardToFreshBackend);
 });
 
 async function openApp(page: Page) {
@@ -117,8 +139,12 @@ async function openApp(page: Page) {
   const authDone = page.waitForResponse(
     (resp) => resp.url().includes("/auth/demo-login") && resp.status() === 200
   );
+  const dataLoaded = page.waitForResponse(
+    (resp) => new URL(resp.url()).pathname === "/api/agent/demo-data" && resp.status() === 200
+  );
   await page.goto("/");
   await authDone;
+  await dataLoaded;
   await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
   await expect(page.getByTestId("chat-input")).toBeVisible();
   await expect(page.getByTestId("diagnostics-panel")).toBeHidden();
@@ -126,25 +152,14 @@ async function openApp(page: Page) {
   await expect(page.getByTestId("trace-status")).toBeHidden();
 }
 
-async function proxyApiToFreshBackend(page: Page) {
-  await page.route(agentApiRoute, async (route) => {
-    const request = route.request();
-    const response = await route.fetch({
-      url: freshBackendUrl(request.url())
-    });
+async function forwardToFreshBackend(route: Route) {
+  try {
+    const response = await route.fetch({ url: freshBackendUrl(route.request().url()) });
     await route.fulfill({ response });
-  });
-}
-
-async function proxyNonTurnToFreshBackend(page: Page) {
-  const nonTurnPattern = /\/api\/agent\/(?!turn)/;
-  await page.route(nonTurnPattern, async (route) => {
-    const request = route.request();
-    const response = await route.fetch({
-      url: freshBackendUrl(request.url())
-    });
-    await route.fulfill({ response });
-  });
+  } catch (error) {
+    // The page closed during teardown while this request was in flight; nothing to answer.
+    if (!String(error).includes("closed")) throw error;
+  }
 }
 
 function freshBackendUrl(requestUrl: string): string {
@@ -358,6 +373,47 @@ test("phase 1 failed saves do not report success", async ({ page }) => {
   await expect(page.getByTestId("project-create-panel")).toBeHidden();
 });
 
+test("milestone 1 failed reset keeps the session and reports the failure", async ({ page }) => {
+  await openApp(page);
+  await sendChat(page, "all tickets for Maya");
+  await expect(page.getByTestId("issue-filter")).toContainText("Maya Chen");
+
+  await page.route("**/api/agent/demo-data/reset", (route) => route.fulfill({
+    status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Unavailable" })
+  }));
+  const reset = page.waitForResponse((response) => response.url().endsWith("/demo-data/reset"));
+  await page.getByTestId("reset-demo").click();
+  expect((await reset).status()).toBe(503);
+
+  await expect(page.getByTestId("data-error")).toContainText("Reset failed");
+  await expect(page.getByTestId("issue-filter")).toContainText("Maya Chen");
+  await expect(page.getByTestId("transcript")).toContainText("Maya Chen");
+});
+
+test("milestone 1 requests that escape interception never reach a real backend", async ({ request }) => {
+  // APIRequestContext bypasses browser routing without removing a live app's protection.
+  const response = await request.get("/api/agent/demo-data");
+  // Only the sentinel answers 503; the development backend would have served data.
+  expect(response.status()).toBe(503);
+  expect(escapedRequests.splice(0)).toEqual(["GET /api/demo-data"]);
+});
+
+test("milestone 1 removing a page override preserves backend isolation", async ({ page }) => {
+  await openApp(page);
+  const dataRoute = "**/api/agent/demo-data";
+  await page.route(dataRoute, (route) => route.fulfill({ status: 503, body: "Unavailable" }));
+  expect(await page.evaluate(async () => (await fetch("/api/agent/demo-data")).status)).toBe(503);
+  await page.unroute(dataRoute);
+  const status = await page.evaluate(async () => {
+    const token = window.sessionStorage.getItem("demo_auth_token");
+    return (await fetch("/api/agent/demo-data", {
+      headers: { Authorization: `Bearer ${token}` }
+    })).status;
+  });
+  expect(status).toBe(200);
+  expect(escapedRequests).toEqual([]);
+});
+
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
   test(`phase 1 layout evidence at ${viewport.width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
@@ -416,6 +472,31 @@ test("shows only the current workspace scope across product views", async ({ pag
   await expect(page.getByText("Avery Brooks")).toBeHidden();
 });
 
+test("milestone 1 duplicate project names cannot widen the browser workspace", async ({ page }) => {
+  const created = await fetch(
+    `http://127.0.0.1:${apiPort}/api/demo-data/projects?workspace_scope_id=workspace-product-eng`,
+    {
+      method: "POST",
+      headers: { ...apiAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Planning", description: "Name collision regression", progress: 0,
+        status: "Planned", lead: "Maya Chen", team: "Product Engineering", targetDate: "2026-12-01"
+      })
+    }
+  );
+  expect(created.ok).toBe(true);
+  await openApp(page);
+  await expect(page.getByTestId("workspace-scope-badge")).toHaveText("3 scoped projects");
+  await page.getByTestId("nav-issues").click();
+  await expect(page.getByTestId("issue-count-badge")).toHaveText("3 open");
+  await expect(page.getByText("LIN-131 - Avery Brooks - Planning")).toBeHidden();
+  await page.getByTestId("nav-teams").click();
+  await expect(page.getByTestId("team-member-count")).toHaveText("2 members");
+  await page.getByTestId("workspace-switcher").selectOption("workspace-platform");
+  await page.getByTestId("nav-issues").click();
+  await expect(page.getByText("LIN-131 - Avery Brooks - Planning")).toBeVisible();
+});
+
 test("switches workspace scope and updates product data boundaries", async ({ page }) => {
   await openApp(page);
 
@@ -462,8 +543,6 @@ test("keeps Edith inside the selected workspace scope", async ({ page }) => {
 test("sends the selected workspace scope to the agent API", async ({ page }) => {
   let capturedWorkspaceScopeId = "";
 
-  await page.unroute(agentApiRoute);
-  await proxyNonTurnToFreshBackend(page);
   await page.route(agentTurnRoute, async (route) => {
     const body = route.request().postDataJSON();
     capturedWorkspaceScopeId = body.workspace_scope_id;
@@ -808,8 +887,6 @@ test("uses voice transcripts as voice-mode turns through the same action pipelin
   page
 }) => {
   await installMockVoice(page);
-  await page.unroute(agentApiRoute);
-  await proxyNonTurnToFreshBackend(page);
   let sawVoiceMode = false;
 
   await page.route(agentTurnRoute, async (route) => {
@@ -838,8 +915,6 @@ test("uses voice transcripts as voice-mode turns through the same action pipelin
 
 test("waits for voice silence before sending the completed spoken turn", async ({ page }) => {
   await installMockVoice(page);
-  await page.unroute(agentApiRoute);
-  await proxyNonTurnToFreshBackend(page);
   const voiceMessages: string[] = [];
 
   await page.route(agentTurnRoute, async (route) => {
@@ -967,8 +1042,6 @@ test("turns agent speech into listening when the user presses voice", async ({ p
 
 test("stops agent speech and listens when the visitor presses voice during speech", async ({ page }) => {
   await installMockVoice(page);
-  await page.unroute(agentApiRoute);
-  await proxyNonTurnToFreshBackend(page);
   const voiceMessages: string[] = [];
 
   await page.route(agentTurnRoute, async (route) => {
@@ -1024,8 +1097,6 @@ test("opens integrations for GitHub and Slack, then blocks out-of-product reques
 });
 
 test("cancels an active turn and ignores the delayed stale result", async ({ page }) => {
-  await page.unroute(agentApiRoute);
-  await proxyNonTurnToFreshBackend(page);
   let turnRequestCount = 0;
   let releaseFirstTurn: () => void = () => undefined;
   const firstTurnCanContinue = new Promise<void>((resolve) => {

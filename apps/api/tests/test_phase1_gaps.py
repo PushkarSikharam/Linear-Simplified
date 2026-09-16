@@ -17,8 +17,12 @@ from fastapi.testclient import TestClient
 from app import db
 from app.auth import create_token
 from app.main import app
+from app.services import env as env_module
+from app.services.agent_reasoner import AgentReasoner
+from app.services.demo_data import issue_in_scope, load_demo_issues
 from app.services.product_data_store import ProductDataStore
 from app.services.session_manager import SessionManager
+from app.workspace_config import get_workspace_scope
 
 
 class PhaseOneGapTest(unittest.TestCase):
@@ -98,10 +102,105 @@ class PhaseOneGapTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    def test_gap_01_demo_login_can_be_disabled(self):
-        with patch.dict(os.environ, {"PIXEL_ENV": "production", "PIXEL_DEMO_LOGIN": "false"}):
-            response = self.client.post("/api/auth/demo-login", json={"user_id": "demo-admin"})
-        self.assertEqual(response.status_code, 403)
+    # --- Milestone 1: defects reproduced after Phase 1 ---
+
+    def test_m1_demo_login_requires_explicit_synthetic_demo_flag(self):
+        body = {"user_id": "demo-admin"}
+        with patch.object(env_module, "_env_files", lambda: ()), patch.dict(os.environ):
+            os.environ.pop("PIXEL_SYNTHETIC_DEMO", None)
+            self.assertEqual(self.client.post("/api/auth/demo-login", json=body).status_code, 403)
+            os.environ["PIXEL_SYNTHETIC_DEMO"] = "false"
+            self.assertEqual(self.client.post("/api/auth/demo-login", json=body).status_code, 403)
+            os.environ["PIXEL_SYNTHETIC_DEMO"] = "true"
+            self.assertEqual(self.client.post("/api/auth/demo-login", json=body).status_code, 200)
+
+    def test_m1_same_named_project_does_not_expand_agent_context(self):
+        # Platform owns the "Planning" issues; a Product Engineering project with the
+        # same name must not make them visible to Product Engineering.
+        ProductDataStore().save_project(_project(name="Planning"), "workspace-product-eng")
+        scope = get_workspace_scope("workspace-product-eng")
+        platform_issues = [issue for issue in load_demo_issues() if issue.projectId in {"PRJ-103", "PRJ-104"}]
+        self.assertTrue(platform_issues)
+
+        leaked = [
+            issue.id for issue in platform_issues
+            if issue_in_scope(issue, set(scope.allowed_project_ids), set(scope.allowed_issue_projects))
+        ]
+        self.assertEqual(leaked, [])
+
+        model_context = AgentReasoner()._visible_workspace_data(scope)["issues"]
+        platform_ids = {issue.id for issue in platform_issues}
+        self.assertEqual([line for line in model_context if line.split()[0] in platform_ids], [])
+
+    def test_m1_member_write_rejects_project_outside_workspace(self):
+        member = {
+            "name": "Scope Breaker", "initials": "SB", "role": "Engineer", "load": 10,
+            "projectIds": ["PRJ-101", "PRJ-103"],
+        }
+        for user_id in ("demo-product-eng", "demo-admin"):
+            response = self.client.post(
+                "/api/demo-data/team-members?workspace_scope_id=workspace-product-eng",
+                json=member,
+                headers=self._auth_header(user_id),
+            )
+            self.assertEqual(response.status_code, 403, user_id)
+        self.assertNotIn("Scope Breaker", {m["name"] for m in ProductDataStore().load()["team"]})
+
+    def test_m1_issue_writes_reject_missing_or_out_of_scope_assignee(self):
+        admin = self._auth_header("demo-admin")
+        issue = next(issue for issue in ProductDataStore().load()["issues"] if issue["projectId"] == "PRJ-101")
+        for assignee in ("Nobody Here", "Avery Brooks"):
+            updated = self.client.put(
+                f"/api/demo-data/issues/{issue['id']}", json={**issue, "assignee": assignee}, headers=admin
+            )
+            self.assertEqual(updated.status_code, 422, assignee)
+            created = self.client.post("/api/demo-data/issues", json=_issue(assignee=assignee), headers=admin)
+            self.assertEqual(created.status_code, 422, assignee)
+        self.assertEqual(ProductDataStore().get_issue(issue["id"])["assignee"], issue["assignee"])
+
+    def test_m1_unchanged_historical_assignee_can_still_be_edited(self):
+        issue = next(issue for issue in ProductDataStore().load()["issues"] if issue["assignee"] == "Sam Rivera")
+        response = self.client.put(
+            f"/api/demo-data/issues/{issue['id']}",
+            json={**issue, "title": "Edited historical ticket"},
+            headers=self._auth_header("demo-admin"),
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_m1_workspace_move_revalidates_unchanged_assignee(self):
+        store = ProductDataStore()
+        for assignee in ("Maya Chen", "Sam Rivera"):
+            with self.subTest(assignee=assignee):
+                issue = next(i for i in store.load()["issues"] if i["assignee"] == assignee)
+                response = self.client.put(
+                    f"/api/demo-data/issues/{issue['id']}",
+                    json={**issue, "projectId": "PRJ-103", "project": "Planning"},
+                    headers=self._auth_header("demo-admin"),
+                )
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(store.get_issue(issue["id"]), issue)
+
+    def test_m1_workspace_move_accepts_destination_assignee(self):
+        store = ProductDataStore()
+        issue = next(i for i in store.load()["issues"] if i["assignee"] == "Maya Chen")
+        response = self.client.put(
+            f"/api/demo-data/issues/{issue['id']}",
+            json={**issue, "projectId": "PRJ-103", "project": "Planning", "assignee": "Avery Brooks"},
+            headers=self._auth_header("demo-admin"),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(store.get_issue(issue["id"])["assignee"], "Avery Brooks")
+
+    def test_m1_historical_assignee_can_move_within_same_workspace(self):
+        issue = next(i for i in ProductDataStore().load()["issues"] if i["assignee"] == "Sam Rivera")
+        self.assertEqual(issue["projectId"], "PRJ-102")
+        response = self.client.put(
+            f"/api/demo-data/issues/{issue['id']}",
+            json={**issue, "projectId": "PRJ-101", "project": "Integrations"},
+            headers=self._auth_header("demo-admin"),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ProductDataStore().get_issue(issue["id"])["projectId"], "PRJ-101")
 
     def test_gap_01_scoped_user_only_reads_own_workspace(self):
         data = self.client.get("/api/demo-data", headers=self._auth_header()).json()
@@ -281,6 +380,13 @@ def _issue(**overrides) -> dict:
     return {
         "title": "Scoped ticket", "priority": "Medium", "assignee": "Maya Chen",
         "project": "Integrations", "projectId": "PRJ-101", "status": "Todo", **overrides,
+    }
+
+
+def _project(**overrides) -> dict:
+    return {
+        "name": "Scoped project", "description": "", "progress": 0, "status": "Planned",
+        "lead": "Maya Chen", "team": "Product Engineering", "targetDate": "2026-12-01", **overrides,
     }
 
 

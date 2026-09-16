@@ -58,9 +58,9 @@ class AuthUser:
 
 
 def demo_login_enabled() -> bool:
-    """Passwordless demo login is on for local use and off in production unless forced."""
-    production = (env_value("PIXEL_ENV") or "").lower() == "production"
-    return env_bool("PIXEL_DEMO_LOGIN", default=not production)
+    """Passwordless demo login, including the admin identity, is only for deployments
+    explicitly marked as isolated synthetic demos. It is never customer access."""
+    return env_bool("PIXEL_SYNTHETIC_DEMO", default=False)
 
 
 def seed_demo_users() -> None:

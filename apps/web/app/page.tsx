@@ -344,43 +344,39 @@ export default function Home() {
   }
 
   function resetDemoSession() {
-    const activeTurnId = activeTurnIdRef.current;
-    if (activeTurnId !== null) {
-      void cancelAgentTurn({ sessionId, turnId: activeTurnId }).catch(() => undefined);
-    }
-
-    activeTurnIdRef.current = null;
-    nextTurnIdRef.current = 1;
-    setSessionId(crypto.randomUUID());
-    setUiState({
-      current_page: "dashboard",
-      active_turn_id: null
-    });
-    setUiEvents([]);
-    setIntentTrace(initialTrace);
-    setSessionSummary(initialSessionSummary);
-    setMessages(initialTranscript);
-    setIssues(demoIssues);
-    setProjects(demoProjects);
-    setCycles(demoCycles);
-    setTeam(demoTeam);
-    setWorkspaceScopes(demoWorkspaceScopes);
-    setWorkspaceScope(demoWorkspaceScope);
-    setDraftPrefill({});
-    setVisitorName(null);
-    setIsSending(false);
-    setTurnStatus("Ready");
+    setDataError(null);
+    // Clear nothing until the server confirms the reset; a failed reset keeps the session as it was.
     void resetStoredDemoData()
       .then((demoData) => {
+        const activeTurnId = activeTurnIdRef.current;
+        if (activeTurnId !== null) {
+          void cancelAgentTurn({ sessionId, turnId: activeTurnId }).catch(() => undefined);
+        }
+
+        activeTurnIdRef.current = null;
+        nextTurnIdRef.current = 1;
+        setSessionId(crypto.randomUUID());
+        setUiState({
+          current_page: "dashboard",
+          active_turn_id: null
+        });
+        setUiEvents([]);
+        setIntentTrace(initialTrace);
+        setSessionSummary(initialSessionSummary);
+        setMessages(initialTranscript);
         setIssues(demoData.issues);
         setProjects(demoData.projects);
         setCycles(demoData.cycles);
         setTeam(demoData.team);
         setWorkspaceScopes(demoData.workspaceScopes);
         setWorkspaceScope(demoData.workspaceScopes[0] ?? demoWorkspaceScope);
+        setDraftPrefill({});
+        setVisitorName(null);
+        setIsSending(false);
+        setTurnStatus("Ready");
       })
       .catch(() => {
-        setDataError("Reset failed, so saved workspace data was not restored. Retry to reload what is saved.");
+        setDataError("Reset failed. Nothing was changed: your current session and saved data are unchanged.");
       });
   }
 
@@ -3468,8 +3464,8 @@ function filterTeamByScope(
 }
 
 function isIssueInScope(issue: DemoIssue, workspaceScope: DemoWorkspaceScope): boolean {
-  if (issue.projectId && workspaceScope.allowedProjectIds.includes(issue.projectId)) {
-    return true;
+  if (issue.projectId) {
+    return workspaceScope.allowedProjectIds.includes(issue.projectId);
   }
 
   return workspaceScope.allowedIssueProjects.includes(issue.project);

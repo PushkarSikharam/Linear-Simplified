@@ -168,9 +168,9 @@ original audit wording as the record of what was observed.
 
 | Gap | Now enforced | Still open |
 | --- | --- | --- |
-| GAP-01 | Bearer tokens on all data, turn, cancel and speech routes (`/api/tts` and `/api/realtime-session` verify through `/api/auth/me`). Non-admin users only read their workspaces; issue create/update, cycle create, project/member create and chat turns check the workspace server-side. Reset is admin-only. Passwordless demo login is off when `PIXEL_ENV=production` unless `PIXEL_DEMO_LOGIN=true`. | Demo identities replace real sign-in (OIDC). The browser demo still signs in as `demo-admin` by default (`NEXT_PUBLIC_PIXEL_DEMO_USER`) because the demo switches between both workspaces. No dedicated per-customer deployment. |
+| GAP-01 | Bearer tokens on all data, turn, cancel and speech routes (`/api/tts` and `/api/realtime-session` verify through `/api/auth/me`). Non-admin users only read their workspaces; issue create/update, cycle create, project/member create and chat turns check the workspace server-side. Reset is admin-only. Passwordless demo login is refused unless the deployment sets `PIXEL_SYNTHETIC_DEMO=true`. | Demo identities replace real sign-in (OIDC). The browser demo still signs in as `demo-admin` by default (`NEXT_PUBLIC_PIXEL_DEMO_USER`) because the demo switches between both workspaces. No dedicated per-customer deployment. |
 | GAP-02 | Forms await server success, keep drafts, show errors and retry with the same idempotency key. Failed initial load and failed reset show a retryable banner instead of silently showing sample data. Expired or restarted-server tokens re-authenticate once and retry. | Chat-driven actions surface failures through the chat turn only. |
-| GAP-03 | Typed request schemas; server-allocated IDs inside a write transaction; duplicate IDs return 409; updates to missing records return 404; issues and cycles must reference existing projects, and new issues an existing team member (422); issue and cycle links to projects are enforced by database foreign keys. Concurrent project creation is covered by a test. | Members are still keyed by name rather than a stable ID, deferred to Phase 2 where it can ride along with the isolation schema work. |
+| GAP-03 | Typed request schemas; server-allocated IDs inside a write transaction; duplicate IDs return 409; updates to missing records return 404; issues and cycles must reference existing projects, and a new or changed issue assignee must be an existing team member working in that issue's workspace (422); issue and cycle links to projects are enforced by database foreign keys. Concurrent project creation is covered by a test. | Members are still keyed by name rather than a stable ID, deferred to Phase 2 where it can ride along with the isolation schema work. |
 | GAP-04 | The agent and validator resolve workspaces from SQLite through one lookup that reads only the scope and team rows. | Scope data is not versioned. |
 | GAP-05 | Sessions are bound to the authenticated user and customer (`conversation_owners`); another user's turn is denied and their cancel returns 404. Cancel is a single conditional update, and every reply path re-checks the active turn before storing. | Browser persistence of an action is still separate from backend turn completion. |
 | GAP-07 | Cancelling speech aborts the `speakLocalResponse` fetch and discards late audio; speech responses are `private, no-store`; provider calls time out after 10 seconds. | Realtime voice still bypasses the backend agent and its workspace policy; physical-device QA is not done. |
@@ -204,6 +204,51 @@ To roll back, stop the API and restore the backup file over `apps/api/data/demo_
 The four audit-era expected failures are now ordinary passing tests. Voice still needs a
 physical-device test: microphone permissions, acoustic echo, and hands-free interruption
 are simulated in these runs.
+
+## Milestone 1: Defects Found After Phase 1 (2026-09-16)
+
+A later review reproduced defects that the passing Phase 1 suite did not catch. Each now
+has a regression test that failed against the previous code and passes after the fix.
+
+| Defect | Fix | Regression test |
+| --- | --- | --- |
+| Agent context crossed workspaces: a same-named project ("Planning") pulled another workspace's issues into the model context | An issue's `projectId` alone decides its workspace; names are a fallback only for issues without one. The reasoner uses the same `issue_in_scope` check | `test_m1_same_named_project_does_not_expand_agent_context` |
+| Member creation accepted project IDs outside the requested workspace | The whole write is rejected with 403, for admins too | `test_m1_member_write_rejects_project_outside_workspace` |
+| Updates accepted a missing or out-of-workspace assignee | New or changed assignees must exist and share the issue's workspace; unchanged historical assignees stay editable | `test_m1_issue_writes_reject_missing_or_out_of_scope_assignee`, `test_m1_unchanged_historical_assignee_can_still_be_edited` |
+| Reset cleared the session before the backend confirmed | Nothing is cleared until the reset succeeds; a failure keeps the session and shows an error | E2E `milestone 1 failed reset keeps the session and reports the failure` |
+| E2E requests could escape to the development backend (the `.env.local` rewrite target) when interception was removed with requests still active | The e2e server rewrites to a sentinel port that records any escaped request; every test fails if one arrives; pages close before interception is removed | E2E `milestone 1 requests that escape interception never reach a real backend`, plus the per-test sentinel check |
+| Anyone could request an admin demo token | Demo login requires `PIXEL_SYNTHETIC_DEMO=true`, for isolated synthetic demos only | `test_m1_demo_login_requires_explicit_synthetic_demo_flag` |
+
+Initial verification: API suite 77 passed; frontend TypeScript check passed; action executor unit
+suite 18 passed; full Chromium browser run 48 passed with no escaped requests.
+
+### Milestone 1 Review Follow-up (2026-09-16)
+
+The subsequent review found two uncovered data cases and intermittent escaped requests
+despite the initial passing run. These were addressed without removing the sentinel checks:
+
+- Browser issue filtering now treats a present project ID as authoritative, matching the
+  backend. A real-browser regression creates a same-named project and verifies issues
+  and team counts remain scoped, while switching workspaces still reveals authorized data.
+- Moving a ticket to a different workspace revalidates its assignee even when the name
+  is unchanged. Tests cover rejection without mutation, a valid destination assignee,
+  and historical assignees remaining editable within the same workspace.
+- Backend and speech interception now lives on the browser context until it closes.
+  Individual turn mocks no longer remove the baseline backend route. The deliberate
+  sentinel probe uses an API request without opening the app or removing live routes.
+  Startup waits for persisted data, and test resets must succeed before tests proceed.
+- A regression removes a page-level override and verifies the context-level backend
+  route remains active. Unexpected sentinel requests still fail tests.
+
+Follow-up verification: API suite 80 passed; frontend unit suite 18 passed; TypeScript
+check passed. The 50-test Chromium suite passed once, then passed twice more with
+`--repeat-each=2 --workers=1`: 150 successful browser test executions in total, no
+unexpected escaped requests, and clean runner shutdown. The new scope and invalid-move
+regressions were observed failing before the fixes. Tests use temporary databases,
+disabled LLM calls, and mocked voice; this is not live-provider or physical-device QA.
+
+Local development now needs `PIXEL_SYNTHETIC_DEMO=true` in the API environment (or a
+root `.env`) for the browser demo to sign in.
 
 ## Stabilization Changes Made in This Audit
 

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.product_config import PRODUCTS_BY_ID
 from app.schemas import IntentTrace, ProposedAction
-from app.services.demo_data import load_demo_issues
+from app.services.demo_data import issue_in_scope, load_demo_issues
 from app.services.env import env_bool, env_int, env_value
 from app.services.product_data_store import ProductDataStore
 from app.services.retriever import RetrievedDocument
@@ -188,8 +188,7 @@ class AgentReasoner:
         issues = [
             f"{issue.id} {issue.title} ({issue.assignee}, {issue.project})"
             for issue in load_demo_issues()
-            if (issue.projectId and issue.projectId in allowed_project_ids)
-            or issue.project in allowed_issue_projects
+            if issue_in_scope(issue, allowed_project_ids, allowed_issue_projects)
         ]
 
         return {"projects": projects[:8], "team": team[:8], "issues": issues[:10]}

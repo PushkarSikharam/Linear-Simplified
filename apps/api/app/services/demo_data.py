@@ -46,8 +46,10 @@ def find_issue_by_id(issue_id: str) -> DemoIssue | None:
 
 
 def issue_in_scope(issue: DemoIssue, allowed_project_ids: set[str], allowed_issue_projects: set[str]) -> bool:
-    if issue.projectId and issue.projectId in allowed_project_ids:
-        return True
+    # A project ID is authoritative. Names are only a fallback for issues without one,
+    # because a same-named project in another workspace must never widen access.
+    if issue.projectId:
+        return issue.projectId in allowed_project_ids
     return issue.project in allowed_issue_projects
 
 

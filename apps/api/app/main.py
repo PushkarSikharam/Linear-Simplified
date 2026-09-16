@@ -26,6 +26,7 @@ from app.services.product_data_store import (
     ProductDataStore,
     RecordConflict,
     RecordNotFound,
+    ScopeViolation,
 )
 
 agent = DemoAgent()
@@ -53,6 +54,11 @@ async def conflict_handler(_: Request, error: RecordConflict):
 @app.exception_handler(RecordNotFound)
 async def missing_handler(_: Request, error: RecordNotFound):
     return JSONResponse(status_code=404, content={"detail": str(error)})
+
+
+@app.exception_handler(ScopeViolation)
+async def scope_violation_handler(_: Request, error: ScopeViolation):
+    return JSONResponse(status_code=403, content={"detail": str(error)})
 
 
 @app.exception_handler(InvalidReference)
