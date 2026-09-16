@@ -1,0 +1,82 @@
+"""Development bootstrap: synthetic demo organizations declared by product packages.
+
+A product package may ship `seed/demo_organization.json`, describing a synthetic organization,
+team, members and product for demos and tests. Seeds load only when `PIXEL_DEMO_SEEDS=true`
+is set explicitly; when it is missing, nothing synthetic is ever created. Existing rows
+are left alone, so operator changes such as a version rollback survive restarts.
+"""
+from __future__ import annotations
+
+import json
+
+from pydantic import Field
+
+from app.definitions.contract import Slug, Strict
+from app.definitions.loader import DefinitionSource
+from app.definitions.organizations import OrganizationDirectory
+from app.definitions.registry import DefinitionRegistry
+from app.services.env import env_bool
+
+
+class _SeedOrganization(Strict):
+    tenant_id: Slug
+    name: str
+
+
+class _SeedTeam(Strict):
+    team_id: Slug
+    name: str
+
+
+class _SeedMember(Strict):
+    user_id: str
+    role: str
+    team: bool = False
+
+
+class _SeedProduct(Strict):
+    product_id: Slug
+    definition_version: int = Field(ge=1)
+    knowledge_version: int = Field(default=1, ge=1)
+    visitor_access: bool = False
+
+
+class DemoOrganizationSeed(Strict):
+    organization: _SeedOrganization
+    team: _SeedTeam
+    members: list[_SeedMember] = []
+    product: _SeedProduct
+
+
+def load_demo_seeds(source: DefinitionSource | None = None) -> None:
+    if not env_bool("PIXEL_DEMO_SEEDS", default=False):
+        return
+    directory = OrganizationDirectory(DefinitionRegistry(source) if source else DefinitionRegistry())
+    source = directory.definitions.source
+    for definition_id in source.packages():
+        path = source.seed_path(definition_id)
+        if path.is_file():
+            seed = DemoOrganizationSeed.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            _apply(directory, definition_id, seed)
+
+
+def _apply(directory: OrganizationDirectory, definition_id: str, seed: DemoOrganizationSeed) -> None:
+    tenant_id, team_id = seed.organization.tenant_id, seed.team.team_id
+    if directory.organization(tenant_id) is None:
+        directory.create_organization(tenant_id, seed.organization.name)
+    if directory.team(tenant_id, team_id) is None:
+        directory.create_team(tenant_id, team_id, seed.team.name)
+    for member in seed.members:
+        if directory.membership(tenant_id, member.user_id) is None:
+            directory.add_member(tenant_id, member.user_id, member.role, team_id if member.team else None)
+    if directory.product(tenant_id, seed.product.product_id) is None:
+        directory.definitions.ensure_published(definition_id, seed.product.definition_version)
+        directory.bind_product(
+            tenant_id,
+            seed.product.product_id,
+            team_id,
+            definition_id,
+            seed.product.definition_version,
+            knowledge_version=seed.product.knowledge_version,
+            visitor_access=seed.product.visitor_access,
+        )

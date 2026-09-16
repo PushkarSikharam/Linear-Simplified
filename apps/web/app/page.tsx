@@ -2999,6 +2999,7 @@ function ConversationCard({
       onError: (err) => {
         setVoiceError(err);
       },
+      productId: productConfig.id,
       getSessionId: () => sessionIdRef.current
     });
 

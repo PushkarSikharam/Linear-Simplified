@@ -24,7 +24,7 @@ from app.services.usage_ledger import (
     UsageLedger,
     logger as usage_logger,
 )
-from app.tenancy import TenantContext
+from app.tenancy import ProductContext
 
 
 class SpeechUnavailable(Exception):
@@ -40,19 +40,20 @@ class SpeechService:
     def __init__(
         self,
         ledger: UsageLedger | None = None,
-        providers: Callable[[TenantContext], list[SpeechProvider]] = configured_speech_providers,
+        providers: Callable[[ProductContext, str], list[SpeechProvider]] = configured_speech_providers,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._ledger = ledger or UsageLedger()
         self._providers = providers
         self._clock = clock
-        # Providers that asked us to back off, keyed by tenant and provider.
-        self._cooldown_until: dict[tuple[str, str], float] = {}
+        # Providers that asked us to back off, keyed by organization, product and provider.
+        self._cooldown_until: dict[tuple[str, str, str], float] = {}
 
     def synthesize(
         self,
         *,
-        tenant: TenantContext,
+        tenant: ProductContext,
+        voice_style: str,
         user_id: str,
         session_id: str | None,
         text: str,
@@ -60,7 +61,10 @@ class SpeechService:
         # The kill switch is reported first, whatever providers happen to be configured.
         if not paid_providers_enabled(tenant):
             raise SpeechUnavailable(429, "providers_disabled")
-        providers = [provider for provider in self._providers(tenant) if not self._cooling_down(tenant, provider)]
+        providers = [
+            provider for provider in self._providers(tenant, voice_style)
+            if not self._cooling_down(tenant, provider)
+        ]
         if not providers:
             raise SpeechUnavailable(503, "no_provider_available")
 
@@ -73,7 +77,8 @@ class SpeechService:
             except SpeechProviderError as error:
                 self._settle(attempt_id, tenant, error.status, started, error.reason)
                 if error.retry_after_seconds:
-                    self._cooldown_until[(tenant.tenant_id, provider.name)] = self._clock() + error.retry_after_seconds
+                    key = (tenant.tenant_id, tenant.product_id, provider.name)
+                    self._cooldown_until[key] = self._clock() + error.retry_after_seconds
                 continue
             except BaseException as error:
                 self._settle(attempt_id, tenant, "failed", started, type(error).__name__)
@@ -85,7 +90,7 @@ class SpeechService:
 
     def _reserve(
         self,
-        tenant: TenantContext,
+        tenant: ProductContext,
         user_id: str,
         session_id: str | None,
         request_id: str,
@@ -108,7 +113,7 @@ class SpeechService:
         except AccountingUnavailable as error:
             raise SpeechUnavailable(503, "accounting_unavailable") from error
 
-    def _settle(self, attempt_id: str, tenant: TenantContext, status: str, started: float,
+    def _settle(self, attempt_id: str, tenant: ProductContext, status: str, started: float,
                 reason: str | None = None) -> None:
         # Providers report no character usage, so actual units stay empty rather than
         # repeating our own count as if the provider had reported it.
@@ -126,5 +131,5 @@ class SpeechService:
                 "event": "settle_failed", "attempt_id": attempt_id, "error": type(error).__name__,
             }))
 
-    def _cooling_down(self, tenant: TenantContext, provider: SpeechProvider) -> bool:
-        return self._clock() < self._cooldown_until.get((tenant.tenant_id, provider.name), 0.0)
+    def _cooling_down(self, tenant: ProductContext, provider: SpeechProvider) -> bool:
+        return self._clock() < self._cooldown_until.get((tenant.tenant_id, tenant.product_id, provider.name), 0.0)

@@ -10,13 +10,17 @@ from pydantic import BaseModel, Field, field_validator
 from app.auth import (
     AuthUser,
     create_token,
+    create_visitor_token,
     demo_login_enabled,
     require_admin,
     require_any_scope,
     require_auth,
+    require_member,
+    require_org_admin,
     require_scope,
     visible_scope_ids,
 )
+from app.definitions.access import AccessDenied, authorize_product
 from app.db import migrate
 from app.schemas import CancelTurnRequest, CancelTurnResponse, TurnRequest, TurnResponse
 from app.record_schemas import CycleInput, IssueInput, MemberInput, ProjectInput
@@ -30,7 +34,8 @@ from app.services.product_data_store import (
 )
 from app.services.speech_service import SpeechService, SpeechUnavailable
 from app.services.usage_ledger import UsageLedger
-from app.tenancy import deployment_tenant
+from app.product_config import PRODUCTS_BY_ID
+from app.tenancy import deployment_id
 
 agent = DemoAgent()
 product_data = ProductDataStore()
@@ -94,36 +99,59 @@ class DemoLoginRequest(BaseModel):
 class DemoLoginResponse(BaseModel):
     token: str
     user_id: str
+    tenant_id: str
 
 
 @app.post("/api/auth/demo-login", response_model=DemoLoginResponse)
 def demo_login(body: DemoLoginRequest) -> DemoLoginResponse:
     if not demo_login_enabled():
         return JSONResponse(status_code=403, content={"detail": "Demo login is disabled."})
+    organizations = agent.directory.organizations_of(body.user_id)
+    if len(organizations) != 1:
+        return JSONResponse(status_code=404, content={"detail": "Unknown demo user."})
+    tenant_id = organizations[0]
+    token = create_token(body.user_id, tenant_id)
+    return DemoLoginResponse(token=token, user_id=body.user_id, tenant_id=tenant_id)
+
+
+class VisitorSessionResponse(BaseModel):
+    token: str
+    visitor_id: str
+    tenant_id: str
+    product_id: str
+
+
+@app.post(
+    "/api/organizations/{tenant_id}/products/{product_id}/visitor-sessions",
+    response_model=VisitorSessionResponse,
+)
+def start_visitor_session(tenant_id: str, product_id: str) -> VisitorSessionResponse:
+    """A visitor session is scoped to one product and grants nothing else."""
     try:
-        token = create_token(body.user_id)
-    except ValueError as exc:
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
-    return DemoLoginResponse(token=token, user_id=body.user_id)
+        token, visitor_id = create_visitor_token(tenant_id, product_id)
+    except AccessDenied:
+        # One answer for unknown, private, disabled and suspended alike.
+        raise HTTPException(status_code=404, detail="This product is not available.")
+    return VisitorSessionResponse(token=token, visitor_id=visitor_id, tenant_id=tenant_id, product_id=product_id)
 
 
 # --- Authenticated endpoints ---
 
 
 @app.get("/api/demo-data")
-def get_demo_data(user: AuthUser = Depends(require_auth)) -> dict[str, list[dict]]:
+def get_demo_data(user: AuthUser = Depends(require_member)) -> dict[str, list[dict]]:
     return product_data.load(visible_scope_ids(user))
 
 
 @app.post("/api/demo-data/reset")
-def reset_demo_data(user: AuthUser = Depends(require_auth)) -> dict[str, list[dict]]:
+def reset_demo_data(user: AuthUser = Depends(require_member)) -> dict[str, list[dict]]:
     require_admin(user)
     return product_data.reset()
 
 
 @app.post("/api/demo-data/issues")
 def create_demo_issue(issue: IssueInput,
-                      user: AuthUser = Depends(require_auth),
+                      user: AuthUser = Depends(require_member),
                       idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
     require_any_scope(product_data.scopes_for_record(issue.projectId, issue.project), user)
     return product_data.save_issue(issue.model_dump(mode="json"), idempotency_key)
@@ -131,7 +159,7 @@ def create_demo_issue(issue: IssueInput,
 
 @app.put("/api/demo-data/issues/{issue_id}")
 def update_demo_issue(issue_id: str, issue: IssueInput,
-                      user: AuthUser = Depends(require_auth)) -> dict:
+                      user: AuthUser = Depends(require_member)) -> dict:
     existing = product_data.get_issue(issue_id)
     if existing is None:
         raise RecordNotFound("This ticket no longer exists.")
@@ -143,7 +171,7 @@ def update_demo_issue(issue_id: str, issue: IssueInput,
 
 @app.post("/api/demo-data/projects")
 def create_demo_project(project: ProjectInput, workspace_scope_id: str,
-                        user: AuthUser = Depends(require_auth),
+                        user: AuthUser = Depends(require_member),
                         idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
     require_scope(workspace_scope_id, user)
     return product_data.save_project(project.model_dump(mode="json"), workspace_scope_id, idempotency_key)
@@ -151,7 +179,7 @@ def create_demo_project(project: ProjectInput, workspace_scope_id: str,
 
 @app.post("/api/demo-data/cycles")
 def create_demo_cycle(cycle: CycleInput,
-                      user: AuthUser = Depends(require_auth),
+                      user: AuthUser = Depends(require_member),
                       idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
     # Cycles without a project are workspace-wide and reserved for administrators.
     if cycle.projectId is None:
@@ -163,7 +191,7 @@ def create_demo_cycle(cycle: CycleInput,
 
 @app.post("/api/demo-data/team-members")
 def create_demo_team_member(member: MemberInput, workspace_scope_id: str,
-                            user: AuthUser = Depends(require_auth),
+                            user: AuthUser = Depends(require_member),
                             idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
     require_scope(workspace_scope_id, user)
     return product_data.save_team_member(member.model_dump(mode="json"), workspace_scope_id, idempotency_key)
@@ -176,6 +204,7 @@ class SpeechRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     text: str = Field(min_length=1, max_length=2000)
+    product_id: str = Field(min_length=1, max_length=64)
     session_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("text")
@@ -189,14 +218,28 @@ class SpeechRequest(BaseModel):
 
 @app.post("/api/speech", response_class=Response)
 def synthesize_speech(body: SpeechRequest, user: AuthUser = Depends(require_auth)) -> Response:
-    tenant = deployment_tenant()
-    # A session is attributed only when it belongs to the caller.
+    try:
+        access = authorize_product(user, body.product_id, agent.directory)
+    except AccessDenied:
+        raise HTTPException(status_code=404, detail="This product is not available.")
+    # A session is attributed only when it belongs to the caller and to this product.
     session_id = body.session_id
-    if session_id and not agent.sessions.owns_session(session_id, user.user_id, user.tenant_id):
-        session_id = None
+    if session_id:
+        pin = agent.sessions.pin_for(session_id)
+        if (
+            pin is None
+            or pin.product_id != body.product_id
+            or not agent.sessions.owns_session(session_id, user.user_id, user.tenant_id)
+        ):
+            session_id = None
+    voice_style = PRODUCTS_BY_ID[access.binding.definition_id].voice_style
     try:
         speech = speech_service.synthesize(
-            tenant=tenant, user_id=user.user_id, session_id=session_id, text=body.text
+            tenant=access.context,
+            voice_style=voice_style,
+            user_id=user.user_id,
+            session_id=session_id,
+            text=body.text,
         )
     except SpeechUnavailable as unavailable:
         return JSONResponse(
@@ -210,21 +253,21 @@ def synthesize_speech(body: SpeechRequest, user: AuthUser = Depends(require_auth
 
 
 @app.get("/api/usage/summary")
-def usage_summary(day: str | None = None, user: AuthUser = Depends(require_auth)) -> dict:
-    require_admin(user)
-    tenant = deployment_tenant()
+def usage_summary(day: str | None = None, user: AuthUser = Depends(require_member)) -> dict:
+    """Usage for the caller's organization, by owning team and product. Organization admins only."""
+    require_org_admin(user)
     return {
-        "tenant_id": tenant.tenant_id,
-        "product_id": tenant.product_id,
-        "deployment_id": tenant.deployment_id,
-        "rows": usage.summary(tenant, day),
+        "tenant_id": user.tenant_id,
+        "deployment_id": deployment_id(),
+        "rows": usage.organization_summary(user.tenant_id, deployment_id(), day),
     }
+
 
 @app.post("/api/turn", response_model=TurnResponse)
 def create_turn(request: TurnRequest,
                 user: AuthUser = Depends(require_auth)) -> TurnResponse:
     require_scope(request.workspace_scope_id, user)
-    return agent.handle_turn(request, owner=user)
+    return agent.handle_turn(request, user)
 
 
 @app.post("/api/turn/{turn_id}/cancel", response_model=CancelTurnResponse)

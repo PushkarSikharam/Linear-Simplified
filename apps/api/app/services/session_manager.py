@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.db import get_connection
+from app.definitions.sessions import SessionPin
 from app.schemas import SessionSummary, Signal
 
 
@@ -20,13 +21,15 @@ class SessionManager:
         user_id: str | None = None,
         tenant_id: str | None = None,
         scope_id: str | None = None,
+        pin: SessionPin | None = None,
     ) -> bool:
         """Create or reuse a session. Returns False if it belongs to someone else.
 
         The conversation_owners.customer_id column holds the owning tenant ID.
 
         Callers without a user (internal tools, unit tests) skip the ownership check;
-        API routes always pass the authenticated user.
+        API routes always pass the authenticated user. A new session stores its definition
+        pin; an existing session keeps the pin it started with.
         """
         with get_connection() as connection:
             connection.execute("begin immediate")
@@ -53,10 +56,21 @@ class SessionManager:
 
             connection.execute(
                 """
-                insert into sessions(id, product_id, active_turn_id, latest_turn_id, started_at)
-                values (?, ?, null, null, ?)
+                insert into sessions(
+                  id, product_id, active_turn_id, latest_turn_id, started_at,
+                  tenant_id, team_id, definition_id, definition_version, definition_checksum,
+                  knowledge_version, expires_at
+                )
+                values (?, ?, null, null, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, product_id, utc_now()),
+                (
+                    session_id, product_id, utc_now(),
+                    *(
+                        (pin.tenant_id, pin.team_id, pin.definition_id, pin.definition_version,
+                         pin.definition_checksum, pin.knowledge_version, pin.expires_at.isoformat())
+                        if pin else (None,) * 7
+                    ),
+                ),
             )
             connection.execute(
                 "insert into visitor_context(session_id) values (?)",
@@ -71,6 +85,34 @@ class SessionManager:
                     (session_id, user_id, tenant_id or "", product_id, scope_id or ""),
                 )
             return True
+
+    def exists(self, session_id: str) -> bool:
+        with get_connection() as connection:
+            return connection.execute("select 1 from sessions where id = ?", (session_id,)).fetchone() is not None
+
+    def pin_for(self, session_id: str) -> SessionPin | None:
+        """The product and definition pin a session started with, or None if unknown or unpinned."""
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                select product_id, tenant_id, team_id, definition_id, definition_version,
+                       definition_checksum, knowledge_version, expires_at
+                from sessions where id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None or row["definition_version"] is None:
+            return None
+        return SessionPin(
+            tenant_id=row["tenant_id"],
+            team_id=row["team_id"],
+            product_id=row["product_id"],
+            definition_id=row["definition_id"],
+            definition_version=row["definition_version"],
+            definition_checksum=row["definition_checksum"],
+            knowledge_version=row["knowledge_version"],
+            expires_at=datetime.fromisoformat(row["expires_at"]),
+        )
 
     def owns_session(self, session_id: str, user_id: str, tenant_id: str) -> bool:
         with get_connection() as connection:

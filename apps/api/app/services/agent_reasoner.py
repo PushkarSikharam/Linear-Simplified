@@ -26,7 +26,7 @@ from app.services.usage_ledger import (
     UsageLedger,
     logger as usage_logger,
 )
-from app.tenancy import TenantContext, deployment_tenant
+from app.tenancy import ProductContext
 from app.workspace_config import WorkspaceScope
 
 
@@ -60,7 +60,8 @@ class PromptSection:
 
 @dataclass(frozen=True)
 class AgentReasoningContext:
-    product_id: str
+    owner: ProductContext
+    definition_id: str
     message: str
     current_page: str | None
     selected_issue_id: str | None
@@ -94,7 +95,7 @@ class AgentReasoner:
             return None
 
         timeout_ms = env_int("LLM_TIMEOUT_MS", 15000)
-        tenant = deployment_tenant()
+        tenant = context.owner
         limits = reasoning_token_limits(tenant)
         payload = self._payload(context, limits)
         if payload is None:
@@ -143,7 +144,7 @@ class AgentReasoner:
     def _settle(
         self,
         attempt_id: str,
-        tenant: TenantContext,
+        tenant: ProductContext,
         status: str,
         started: float,
         reason: str | None = None,
@@ -252,7 +253,7 @@ class AgentReasoner:
         }
 
     def _prompt_sections(self, context: AgentReasoningContext) -> list[PromptSection]:
-        product = PRODUCTS_BY_ID[context.product_id]
+        product = PRODUCTS_BY_ID[context.definition_id]
         visible = self._visible_workspace_data(context.workspace_scope)
         docs = "\n".join(
             f"- {doc.title}: {doc.snippet}"

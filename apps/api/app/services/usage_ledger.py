@@ -9,7 +9,8 @@ Rules:
   provider request may be sent.
 - Once dispatched, an attempt stays counted whatever happens (error, timeout,
   cancellation). ``release`` returns allowance only when no request was sent.
-- Every row and every query is scoped to a tenant, product and deployment.
+- Every row and every query is scoped to an organization (tenant), product and deployment.
+- Each row records the product's owning team at attempt time, so history survives transfers.
 - Rows hold usage metadata only. ``reserved_units`` is our estimate; ``actual_*`` columns
   hold provider-reported usage when available. Neither is billing.
 """
@@ -30,7 +31,7 @@ from app.services.provider_policy import (
     total_attempt_cap,
     usage_retention_days,
 )
-from app.tenancy import TenantContext
+from app.tenancy import ProductContext
 
 SETTLED_STATUSES = ("succeeded", "failed", "timeout", "cancelled")
 
@@ -63,7 +64,7 @@ class AccountingUnavailable(Exception):
 
 @dataclass(frozen=True)
 class AttemptRequest:
-    tenant: TenantContext
+    tenant: ProductContext
     user_id: str
     request_id: str
     capability: str
@@ -92,7 +93,7 @@ class UsageLedger:
     def settle(
         self,
         attempt_id: str,
-        tenant: TenantContext,
+        tenant: ProductContext,
         status: str,
         *,
         user_id: str | None = None,
@@ -125,7 +126,7 @@ class UsageLedger:
                  duration_ms=duration_ms, actual_units=actual_units, reason=_short(reason))
         return settled
 
-    def release(self, attempt_id: str, tenant: TenantContext, *, user_id: str | None = None) -> bool:
+    def release(self, attempt_id: str, tenant: ProductContext, *, user_id: str | None = None) -> bool:
         """Return a reservation's allowance. Only valid when no provider request was sent."""
         user_clause, user_params = _optional_user(user_id)
         with get_connection() as connection:
@@ -141,8 +142,8 @@ class UsageLedger:
             _log("attempt_released", **_tenant_fields(tenant), attempt_id=attempt_id)
         return released
 
-    def summary(self, tenant: TenantContext, usage_day: str | None = None) -> list[dict]:
-        """Per capability, provider and status totals for one tenant's product on one UTC day."""
+    def summary(self, tenant: ProductContext, usage_day: str | None = None) -> list[dict]:
+        """Per capability, provider and status totals for one product on one UTC day."""
         day = usage_day or _today()
         with get_connection() as connection:
             rows = connection.execute(
@@ -156,6 +157,24 @@ class UsageLedger:
                 order by capability, provider, status
                 """,
                 (*_tenant_params(tenant), day),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def organization_summary(self, tenant_id: str, deployment_id: str, usage_day: str | None = None) -> list[dict]:
+        """Usage for one organization on one UTC day, by owning team (at attempt time) and product."""
+        day = usage_day or _today()
+        with get_connection() as connection:
+            rows = connection.execute(
+                """
+                select team_id, product_id, capability, provider, unit, status, count(*) as attempts,
+                       coalesce(sum(reserved_units), 0) as reserved_units,
+                       sum(actual_units) as actual_units
+                from provider_attempts
+                where tenant_id = ? and deployment_id = ? and usage_day = ?
+                group by team_id, product_id, capability, provider, unit, status
+                order by team_id, product_id, capability, provider, status
+                """,
+                (tenant_id, deployment_id, day),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -178,14 +197,15 @@ class UsageLedger:
             connection.execute(
                 """
                 insert into provider_attempts(
-                  attempt_id, tenant_id, product_id, deployment_id, user_id, session_id,
+                  attempt_id, tenant_id, product_id, deployment_id, team_id, user_id, session_id,
                   request_id, capability, provider, model, unit, reserved_units,
                   status, reason, usage_day, created_at
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    attempt_id, *_tenant_params(attempt.tenant), attempt.user_id, attempt.session_id,
+                    attempt_id, *_tenant_params(attempt.tenant), attempt.tenant.team_id,
+                    attempt.user_id, attempt.session_id,
                     attempt.request_id, attempt.capability, attempt.provider, attempt.model,
                     policy.unit if policy else "none",
                     0 if refusal else attempt.reserved_units,
@@ -260,12 +280,17 @@ def _budget_refusal(connection, attempt: AttemptRequest, policy, day: str) -> st
     return None
 
 
-def _tenant_params(tenant: TenantContext) -> tuple[str, str, str]:
+def _tenant_params(tenant: ProductContext) -> tuple[str, str, str]:
     return tenant.tenant_id, tenant.product_id, tenant.deployment_id
 
 
-def _tenant_fields(tenant: TenantContext) -> dict[str, str]:
-    return {"tenant_id": tenant.tenant_id, "product_id": tenant.product_id, "deployment_id": tenant.deployment_id}
+def _tenant_fields(tenant: ProductContext) -> dict[str, str]:
+    return {
+        "tenant_id": tenant.tenant_id,
+        "team_id": tenant.team_id,
+        "product_id": tenant.product_id,
+        "deployment_id": tenant.deployment_id,
+    }
 
 
 def _optional_user(user_id: str | None) -> tuple[str, tuple[str, ...]]:

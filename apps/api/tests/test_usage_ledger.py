@@ -1,4 +1,4 @@
-"""Milestone 2: tenant-scoped provider usage ledger. Fake providers only; no network calls."""
+"""Milestone 2: organization- and product-scoped provider usage ledger. Fake providers only; no network calls."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -14,18 +14,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient
 from app import db
-from app.auth import create_token
+from app.auth import AuthUser, create_token, create_visitor_token
+from app.definitions.access import authorize_product
+from app.definitions.organizations import OrganizationDirectory
 from app.main import app
 from app.services import env as env_module
 from app.services import usage_ledger as ledger_module
 from app.services.agent_reasoner import AgentReasoner, AgentReasoningContext
 from app.services.product_data_store import ProductDataStore
 from app.services.usage_ledger import AccountingUnavailable, AttemptRequest, BudgetExceeded, UsageLedger
-from app.tenancy import TenantContext, deployment_tenant
+from app.tenancy import ProductContext
 from app.workspace_config import get_workspace_scope
 
 SECRET_MESSAGE = "please keep this visitor sentence out of logs"
-OTHER_TENANT = TenantContext(tenant_id="acme", product_id="acme-billing", deployment_id="acme-prod")
+DEMO_PRODUCT = ProductContext(tenant_id="pixel-dev", team_id="planning-team", product_id="linear-demo",
+                              deployment_id="local-dev")
+OTHER_TENANT = ProductContext(tenant_id="acme", team_id="billing", product_id="acme-billing", deployment_id="local-dev")
+
+
+ORG_ADMIN = AuthUser(kind="member", user_id="demo-admin", tenant_id="pixel-dev", role="org_admin")
 
 
 class LedgerFixture(unittest.TestCase):
@@ -38,10 +45,11 @@ class LedgerFixture(unittest.TestCase):
         env_patch = patch.dict(os.environ, {"PIXEL_BLOCK_EXTERNAL_HTTP": "true"})
         env_patch.start()
         self.addCleanup(env_patch.stop)
-        for name in [key for key in os.environ if key.startswith(("PIXEL_BUDGET_", "PIXEL_TOTAL_", "PIXEL_TENANT",
-                                                                  "PIXEL_PRODUCT", "PIXEL_DEPLOYMENT", "LLM_"))]:
+        for name in [key for key in os.environ if key.startswith(("PIXEL_BUDGET_", "PIXEL_TOTAL_", "PIXEL_DEPLOYMENT",
+                                                                  "PIXEL_DEMO_SEEDS", "LLM_"))]:
             os.environ.pop(name)
         os.environ.pop("PIXEL_PAID_PROVIDERS_ENABLED", None)
+        os.environ["PIXEL_DEMO_SEEDS"] = "true"
 
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -50,7 +58,7 @@ class LedgerFixture(unittest.TestCase):
         self.addCleanup(db_patch.stop)
         db.migrate()
         self.ledger = UsageLedger()
-        self.tenant = deployment_tenant()
+        self.tenant = DEMO_PRODUCT
 
     def attempt(self, tenant=None, **overrides) -> AttemptRequest:
         fields = {
@@ -73,7 +81,8 @@ class LedgerFixture(unittest.TestCase):
 
     def reasoning_context(self) -> AgentReasoningContext:
         return AgentReasoningContext(
-            product_id="linear_simplified",
+            owner=self.tenant,
+            definition_id="linear_simplified",
             message=SECRET_MESSAGE,
             current_page="dashboard",
             selected_issue_id=None,
@@ -95,16 +104,30 @@ class UsageLedgerTest(LedgerFixture):
         self.reserve(session_id="session-1", model="en-US-Ava")
         row = self.rows()[0]
         self.assertEqual(
-            (row["tenant_id"], row["product_id"], row["deployment_id"]),
-            ("pixel-dev", "linear_simplified", "local-dev"),
+            (row["tenant_id"], row["team_id"], row["product_id"], row["deployment_id"]),
+            ("pixel-dev", "planning-team", "linear-demo", "local-dev"),
         )
         self.assertEqual((row["user_id"], row["session_id"]), ("demo-product-eng", "session-1"))
         self.assertEqual((row["unit"], row["reserved_units"], row["status"]), ("characters", 10, "reserved"))
 
-    def test_deployment_configuration_sets_the_owner(self):
-        os.environ.update({"PIXEL_TENANT_ID": "acme", "PIXEL_PRODUCT_ID": "acme-billing",
-                           "PIXEL_DEPLOYMENT_ID": "acme-prod"})
-        self.assertEqual(deployment_tenant(), OTHER_TENANT)
+    def test_team_attribution_is_recorded_at_attempt_time(self):
+        directory = OrganizationDirectory()
+        self.reserve(authorize_product(ORG_ADMIN, "linear-demo", directory).context, request_id="before")
+        directory.create_team("pixel-dev", "growth-team", "Growth")
+        directory.transfer_product("pixel-dev", "linear-demo", "growth-team")
+        self.reserve(authorize_product(ORG_ADMIN, "linear-demo", directory).context, request_id="after")
+        # Earlier attempts keep the team that owned the product when they were made.
+        self.assertEqual([row["team_id"] for row in self.rows()], ["planning-team", "growth-team"])
+        summary = self.ledger.organization_summary("pixel-dev", "local-dev")
+        self.assertEqual(
+            [(row["team_id"], row["product_id"], row["attempts"]) for row in summary],
+            [("growth-team", "linear-demo", 1), ("planning-team", "linear-demo", 1)],
+        )
+
+    def test_organization_identity_is_independent_of_the_deployment(self):
+        os.environ["PIXEL_DEPLOYMENT_ID"] = "pixel-prod-us"
+        context = authorize_product(ORG_ADMIN, "linear-demo").context
+        self.assertEqual((context.tenant_id, context.deployment_id), ("pixel-dev", "pixel-prod-us"))
 
     def test_tenant_budgets_are_independent(self):
         os.environ["PIXEL_BUDGET_SPEECH_DEPLOYMENT_ATTEMPTS"] = "1"
@@ -350,7 +373,7 @@ class UsageLedgerTest(LedgerFixture):
 
 
 class UsageApiTest(LedgerFixture):
-    """Tenant binding of tokens and the tenant-scoped admin usage summary."""
+    """Organization binding of tokens and the organization-scoped admin usage summary."""
 
     def setUp(self):
         super().setUp()
@@ -359,22 +382,37 @@ class UsageApiTest(LedgerFixture):
     def headers(self, user_id="demo-product-eng") -> dict[str, str]:
         return {"Authorization": f"Bearer {create_token(user_id)}"}
 
-    def test_tokens_from_another_tenant_are_rejected(self):
-        foreign = {"Authorization": f"Bearer {create_token('demo-admin', tenant_id='acme')}"}
-        self.assertEqual(self.client.get("/api/demo-data", headers=foreign).status_code, 401)
-        self.assertEqual(self.client.get("/api/demo-data", headers=self.headers()).status_code, 200)
+    def test_tokens_require_an_active_organization_membership(self):
+        with self.assertRaises(ValueError):
+            create_token("demo-admin", tenant_id="acme")
+        headers = self.headers()
+        self.assertEqual(self.client.get("/api/demo-data", headers=headers).status_code, 200)
+        directory = OrganizationDirectory()
+        directory.set_organization_state("pixel-dev", "suspended")
+        self.assertEqual(self.client.get("/api/demo-data", headers=headers).status_code, 403)
+        directory.set_organization_state("pixel-dev", "active")
+        with db.get_connection() as connection:
+            connection.execute("delete from memberships where user_id = 'demo-product-eng'")
+        self.assertEqual(self.client.get("/api/demo-data", headers=headers).status_code, 401)
 
     def test_reservation_endpoints_no_longer_exist(self):
         response = self.client.post("/api/usage/reservations", json={}, headers=self.headers())
         self.assertEqual(response.status_code, 404)
 
-    def test_summary_is_admin_only_and_tenant_scoped(self):
+    def test_summary_is_for_organization_admins_and_their_organization_only(self):
         self.reserve(request_id="mine")
         self.reserve(OTHER_TENANT, request_id="foreign")
         self.assertEqual(self.client.get("/api/usage/summary", headers=self.headers()).status_code, 403)
+        visitor_token, _ = create_visitor_token("pixel-dev", "linear-demo")
+        visitor = {"Authorization": f"Bearer {visitor_token}"}
+        self.assertEqual(self.client.get("/api/usage/summary", headers=visitor).status_code, 403)
         summary = self.client.get("/api/usage/summary", headers=self.headers("demo-admin")).json()
-        self.assertEqual((summary["tenant_id"], summary["product_id"]), ("pixel-dev", "linear_simplified"))
-        self.assertEqual([row["attempts"] for row in summary["rows"]], [1])
+        self.assertEqual((summary["tenant_id"], summary["deployment_id"]), ("pixel-dev", "local-dev"))
+        self.assertEqual(
+            [(row["team_id"], row["product_id"], row["attempts"]) for row in summary["rows"]],
+            [("planning-team", "linear-demo", 1)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

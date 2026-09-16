@@ -1,8 +1,10 @@
-"""Tenant ownership for the running deployment.
+"""Logical tenancy and physical deployment identity.
 
-Each customer runs an isolated Pixel deployment that serves exactly one tenant and one
-product. Ownership therefore comes from deployment configuration, never from request
-input. Every tenant-owned record (usage, sessions, logins) is stamped with this context.
+Logical tenancy is Organization → Team → Product. In code the organization's identifier is
+`tenant_id`. Physical deployment is a separate concept: one shared deployment serves many
+organizations, and a dedicated deployment is only a hosting choice. Organization, team and
+product identity therefore always come from the authenticated request and the product
+registry, never from deployment configuration.
 """
 from __future__ import annotations
 
@@ -10,21 +12,18 @@ from dataclasses import dataclass
 
 from app.services.env import env_value
 
-DEV_TENANT_ID = "pixel-dev"
-DEV_PRODUCT_ID = "linear_simplified"
-DEV_DEPLOYMENT_ID = "local-dev"
+DEFAULT_DEPLOYMENT_ID = "local-dev"
 
 
 @dataclass(frozen=True)
-class TenantContext:
+class ProductContext:
+    """The owner of one product's Pixel: who a session, a record or a usage row belongs to."""
+
     tenant_id: str
+    team_id: str
     product_id: str
     deployment_id: str
 
 
-def deployment_tenant() -> TenantContext:
-    return TenantContext(
-        tenant_id=env_value("PIXEL_TENANT_ID") or DEV_TENANT_ID,
-        product_id=env_value("PIXEL_PRODUCT_ID") or DEV_PRODUCT_ID,
-        deployment_id=env_value("PIXEL_DEPLOYMENT_ID") or DEV_DEPLOYMENT_ID,
-    )
+def deployment_id() -> str:
+    return env_value("PIXEL_DEPLOYMENT_ID") or DEFAULT_DEPLOYMENT_ID

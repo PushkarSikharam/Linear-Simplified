@@ -12,13 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pydantic import ValidationError
 
+from app.definitions.access import authorize_product
 from app.schemas import TurnRequest
 from app.services.agent import DemoAgent
 from app.services.agent_reasoner import AgentReasoner, estimate_tokens
 from app.services.provider_policy import ReasoningTokenLimits
 from app.services.retriever import RetrievedDocument
 from app.workspace_config import get_workspace_scope
-from test_usage_ledger import LedgerFixture, SECRET_MESSAGE
+from test_usage_ledger import ORG_ADMIN, LedgerFixture, SECRET_MESSAGE
 
 DEFAULT_LIMITS = ReasoningTokenLimits(max_input_tokens=4_000, max_output_tokens=512)
 
@@ -79,7 +80,7 @@ class ReasoningLimitsTest(LedgerFixture):
         self.assertEqual(self.rows()[0]["reserved_units"], estimate_tokens(json.dumps(sent)) + 512)
 
     def test_visitor_messages_are_length_limited(self):
-        base = {"session_id": "s", "turn_id": 1, "product_id": "linear_simplified"}
+        base = {"session_id": "s", "turn_id": 1, "product_id": "linear-demo"}
         TurnRequest(**base, message="x" * 2000)
         with self.assertRaises(ValidationError):
             TurnRequest(**base, message="x" * 2001)
@@ -99,14 +100,15 @@ class PersistentSessionLimitTest(LedgerFixture):
             calls.append(payload)
             raise TimeoutError()
 
-        request = TurnRequest(session_id="s1", turn_id=1, product_id="linear_simplified",
+        request = TurnRequest(session_id="s1", turn_id=1, product_id="linear-demo",
                               message="how should my team plan work")
+        access = authorize_product(ORG_ADMIN, "linear-demo")
         scope = get_workspace_scope("workspace-product-eng")
         for _ in range(2):
             agent = DemoAgent()  # a fresh process-level agent each time
             self.assertFalse(hasattr(agent, "llm_call_counts"))
             agent.llm_reasoner = AgentReasoner(transport=transport)
-            agent._reason_with_llm(request, request.message, scope, "demo-product-eng")
+            agent._reason_with_llm(request, request.message, scope, "demo-product-eng", access, "linear_simplified")
         self.assertEqual(len(calls), 1)
         self.assertEqual(self.statuses(), ["timeout", "blocked"])
 

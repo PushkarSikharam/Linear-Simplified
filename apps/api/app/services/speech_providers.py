@@ -8,10 +8,9 @@ from dataclasses import dataclass
 from html import escape
 from typing import Protocol
 
-from app.product_config import PRODUCTS_BY_ID
 from app.services import http_client
 from app.services.env import env_value
-from app.tenancy import TenantContext
+from app.tenancy import ProductContext
 
 PROVIDER_TIMEOUT_SECONDS = 10.0
 
@@ -41,13 +40,12 @@ class SpeechProvider(Protocol):
     def synthesize(self, text: str) -> SynthesizedSpeech: ...
 
 
-def configured_speech_providers(tenant: TenantContext) -> list[SpeechProvider]:
-    """Providers in fallback order for this tenant's product.
+def configured_speech_providers(owner: ProductContext, voice_style: str) -> list[SpeechProvider]:
+    """Providers in fallback order for one product.
 
-    Credentials and voices come from deployment configuration today; the tenant argument
-    is the seam for per-tenant provider settings.
+    `voice_style` comes from the product's pinned definition. Credentials and voices still
+    come from deployment configuration; `owner` is the seam for per-product provider settings.
     """
-    product = PRODUCTS_BY_ID[tenant.product_id]
     providers: list[SpeechProvider] = []
     azure_key, azure_region = env_value("AZURE_SPEECH_KEY"), env_value("AZURE_SPEECH_REGION")
     if azure_key and azure_region:
@@ -58,7 +56,7 @@ def configured_speech_providers(tenant: TenantContext) -> list[SpeechProvider]:
             output_format=env_value("AZURE_SPEECH_OUTPUT_FORMAT") or "audio-48khz-192kbitrate-mono-mp3",
         ))
     if gemini_key := env_value("GEMINI_API_KEY"):
-        providers.append(GeminiSpeech(key=gemini_key, style=product.voice_style))
+        providers.append(GeminiSpeech(key=gemini_key, style=voice_style))
     if openai_key := env_value("OPENAI_API_KEY"):
         providers.append(OpenAISpeech(key=openai_key))
     return providers

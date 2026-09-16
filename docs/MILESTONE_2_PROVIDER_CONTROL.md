@@ -1,6 +1,6 @@
 # Milestone 2: Provider Control, Accounting and CI
 
-Status date: 2026-09-16. Every Milestone 2 blocker is closed or formally waived. **Awaiting stakeholder sign-off.**
+Status date: 2026-09-16. **Milestone 2 is signed off by the stakeholder.** Every blocker is closed or formally waived, PR #1 is merged (`4a4938b`), and CI on `main` is green (run 35129276630).
 - CI is green on GitHub for pushes to `main`: run 35126923767 (commit `73cd03d`, the CI fix) and run 35128102003 (commit `4a1fd69`, this evidence plus the harness fix).
 - Paid before/after measurement: formally waived (see Measurement decision).
 - Pull-request evidence: PR #1 (`milestone-2-pr-evidence`, commit `57bb5a7`); run 35128855230 passed API tests, Web checks and Browser tests.
@@ -21,6 +21,7 @@ Status date: 2026-09-16. Every Milestone 2 blocker is closed or formally waived.
   - usage: `unit`, `reserved_units`, `actual_units` (plus the input/output split), `status`, timings
   - Every budget query, settle, release and summary is scoped by tenant, product and deployment.
   - Ownership comes from deployment configuration (`PIXEL_TENANT_ID`, `PIXEL_PRODUCT_ID`, `PIXEL_DEPLOYMENT_ID`). Login tokens are bound to that tenant.
+  - *Superseded in Milestone 3, step 3.1:* ownership now comes from the authenticated principal and the product binding, and each attempt also records the owning `team_id`. Only `PIXEL_DEPLOYMENT_ID` remains configuration. See `docs/MILESTONE_3_STEP_3_1.md`.
 - **Atomic, persistent budgets.** Reservations run inside `begin immediate` transactions, so they survive restarts, new sessions and demo resets.
   - Consumption counts the larger of the reserved estimate and the provider-reported usage.
   - Blocked attempts are recorded, but reserve nothing.
@@ -178,7 +179,7 @@ The stakeholder briefly authorized a bounded paid measurement (20-attempt ceilin
 
 ## Milestone 3 boundary
 
-**Start condition:** Milestone 3 starts only after this milestone has green pull-request CI evidence. The measurement decision is resolved: waived.
+**Start condition:** met on 2026-09-16. Pull-request CI is green, the measurement is waived, and Milestone 2 is signed off.
 
 **Goal:** convert the Linear-specific core into a product-configurable architecture, without weakening Milestone 2's tenant boundaries. The work covers:
 - `ProductProfile`

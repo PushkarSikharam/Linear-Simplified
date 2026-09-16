@@ -1,15 +1,15 @@
-"""Paid-provider policy: which capabilities a tenant may use, and how much.
+"""Paid-provider policy: which capabilities a product may use, and how much.
 
-Policies are configured per deployment today (one tenant per deployment). Every lookup
-already takes the tenant context, so policies can move to per-tenant records without
-changing accounting semantics or call sites.
+Limits are configured per deployment today and applied per organization and product.
+Every lookup already takes the product context, so policies can move to per-organization
+records without changing accounting semantics or call sites.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
 from app.services.env import env_bool, env_int, env_value
-from app.tenancy import TenantContext
+from app.tenancy import ProductContext
 
 CAPABILITIES = ("speech", "reasoning", "realtime")
 
@@ -57,19 +57,19 @@ _DEFAULTS: dict[str, CapabilityPolicy] = {
 }
 
 
-def paid_providers_enabled(tenant: TenantContext) -> bool:
+def paid_providers_enabled(tenant: ProductContext) -> bool:
     """Kill switch for every paid provider."""
     return env_bool("PIXEL_PAID_PROVIDERS_ENABLED", default=True)
 
 
-def reasoning_token_limits(tenant: TenantContext) -> ReasoningTokenLimits:
+def reasoning_token_limits(tenant: ProductContext) -> ReasoningTokenLimits:
     return ReasoningTokenLimits(
         max_input_tokens=env_int("LLM_MAX_INPUT_TOKENS", 4_000),
         max_output_tokens=env_int("LLM_MAX_OUTPUT_TOKENS", 512),
     )
 
 
-def capability_policy(tenant: TenantContext, capability: str) -> CapabilityPolicy:
+def capability_policy(tenant: ProductContext, capability: str) -> CapabilityPolicy:
     if capability not in _DEFAULTS:
         raise ValueError(f"Unknown capability: {capability}")
     default = _DEFAULTS[capability]
@@ -90,11 +90,11 @@ def capability_policy(tenant: TenantContext, capability: str) -> CapabilityPolic
     return policy
 
 
-def max_attempts_per_request(tenant: TenantContext) -> int:
+def max_attempts_per_request(tenant: ProductContext) -> int:
     return env_int("PIXEL_MAX_ATTEMPTS_PER_REQUEST", 2)
 
 
-def total_attempt_cap(tenant: TenantContext) -> int | None:
+def total_attempt_cap(tenant: ProductContext) -> int | None:
     """Optional hard ceiling on every attempt recorded for this deployment (measurement runs)."""
     return _optional_int("PIXEL_TOTAL_ATTEMPT_CAP", None)
 

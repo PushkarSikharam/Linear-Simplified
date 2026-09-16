@@ -1,0 +1,68 @@
+"""Closed platform vocabularies.
+
+A product definition may only *request* what is listed here. Adding a capability, platform
+view, response key, placeholder or tenant setting is a reviewed platform code change;
+no definition can create one by declaring it.
+"""
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class Capability(StrEnum):
+    NAVIGATE_VIEW = "NAVIGATE_VIEW"
+    OPEN_RECORD = "OPEN_RECORD"
+    FILTER_RECORDS = "FILTER_RECORDS"
+    CREATE_RECORD = "CREATE_RECORD"
+    UPDATE_RECORD = "UPDATE_RECORD"
+    HIGHLIGHT_CONTROL = "HIGHLIGHT_CONTROL"
+
+
+# Record deletion is deliberately absent.
+MUTATING_CAPABILITIES = frozenset({Capability.CREATE_RECORD, Capability.UPDATE_RECORD})
+
+# Views owned by Pixel itself and available to every product.
+PLATFORM_VIEWS = frozenset({"architecture"})
+
+# Placeholders a response template may use. Values are always inserted as plain text.
+RESPONSE_PLACEHOLDERS = frozenset({
+    "product", "assistant", "scope", "view", "visitor",
+    "person", "record_id", "record_title", "records",
+    "field", "value", "changes", "count",
+})
+
+# Response templates the platform knows how to use.
+RESPONSE_KEYS = frozenset({
+    "greeting", "greeting_named", "identity", "capabilities", "fallback",
+    "guided_path", "next_step", "nothing_changed", "last_change", "correction",
+    "view_opened", "record_opened", "records_filtered", "record_created", "record_updated",
+    "control_highlighted", "member_missing", "unknown_person",
+    "out_of_scope", "destructive_refused", "person_outside_scope", "work_outside_scope",
+    "broad_scope_refused", "clarify_create", "clarify_assign", "clarify_owner",
+    "clarify_all_items", "clarify_update_target", "people_count", "anchor_count",
+    "conversation_ended",
+})
+
+# Parameters an intent may ask the router to extract from the visitor's message.
+INTENT_REQUIREMENTS = frozenset({"person", "record", "selected_record", "unknown_person"})
+
+# Product settings a binding may override. Everything else is rejected.
+TENANT_SETTING_KEYS = frozenset({"display_name", "assistant_name", "greeting"})
+
+# Who owns a definition. There is no team-private ownership in Milestone 3.
+DEFINITION_OWNERSHIP = ("platform_shared", "organization_private")
+
+# Roles an organization user can hold. Visitors are a separate kind of principal.
+MEMBER_ROLES = ("org_admin", "team_admin", "team_member")
+TEAM_ROLES = ("team_admin", "team_member")
+
+ORGANIZATION_STATES = ("active", "suspended")
+TEAM_STATES = ("active", "disabled")
+PRODUCT_STATES = ("active", "disabled")
+
+# Field types an entity may declare.
+SCALAR_FIELD_TYPES = frozenset({"text", "integer", "enum", "date", "boolean", "text_list"})
+REFERENCE_FIELD_TYPES = frozenset({"ref", "refs"})
+
+# The longest path from a record to its scope anchor (record -> related record -> anchor).
+MAX_SCOPE_HOPS = 2

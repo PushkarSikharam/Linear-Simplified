@@ -1,0 +1,829 @@
+{
+  "nav-sprint-planning": [
+    {
+      "message": "How does sprint planning work?",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Cycles",
+      "reply": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "nav-week-by-week": [
+    {
+      "message": "How should my team plan work week by week?",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Cycles",
+      "reply": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "nav-issues": [
+    {
+      "message": "Show me the issues",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issues",
+      "reply": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. I'll open Issues.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "nav-roadmap": [
+    {
+      "message": "Where do I see roadmap progress?",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Projects",
+      "reply": "Projects group related issues into larger product or roadmap efforts. I'll open Projects.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "nav-team-workload": [
+    {
+      "message": "Show team workload",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Teams",
+      "reply": "Teams represent engineering groups, ownership boundaries, and capacity. I'll open Teams.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "nav-integrations": [
+    {
+      "message": "What integrations do you support?",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Integrations",
+      "reply": "Integrations connect Pixel with tools used by engineering teams. I'll open Integrations.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "typo-cycles": [
+    {
+      "message": "show me the cicles",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Cycles",
+      "reply": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "typo-ticket": [
+    {
+      "message": "open mayas tiket",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "correction-clause": [
+    {
+      "message": "show me projects, actually I mean cycles",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Cycles",
+      "reply": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "correction-negation": [
+    {
+      "message": "not cycles, show me the issues",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issues",
+      "reply": "Got it. I'll switch to Issues.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "person-ticket": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "person-all-tickets": [
+    {
+      "message": "Show all tickets for Maya",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issues",
+      "reply": "I found 1 ticket assigned to Maya Chen: LIN-142. I'll show those issues.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": "AssigneeMaya Chen",
+      "open_issue": null
+    }
+  ],
+  "person-follow-up": [
+    {
+      "message": "Show me the issues",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issues",
+      "reply": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. I'll open Issues.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    },
+    {
+      "message": "what about Noah",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issues",
+      "reply": "I found 1 ticket assigned to Noah Patel: LIN-137. I'll show those issues.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": "AssigneeNoah Patel",
+      "open_issue": null
+    }
+  ],
+  "current-ticket": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    },
+    {
+      "message": "open this ticket",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "assignment-workflow": [
+    {
+      "message": "How do I assign a ticket?",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "Assignment is handled from the issue detail panel. I'll open LIN-142 and highlight the assignee control for Maya Chen.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "assignee-control"
+      ],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "update-reassign": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    },
+    {
+      "message": "assign it to Noah",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "Done. I updated LIN-142: assignee is now Noah Patel.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "update-priority": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    },
+    {
+      "message": "make it high priority",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "Done. I updated LIN-142: the issue details are unchanged.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "update-status": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    },
+    {
+      "message": "mark it done",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "Done. I updated LIN-142: status is now Done.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "update-outside-person": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    },
+    {
+      "message": "assign it to Avery",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "Avery Brooks is outside Product Engineering Workspace, so I can't show or change their project work here.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "update-unknown-person": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    },
+    {
+      "message": "assign it to Priya",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Teams",
+      "reply": "Priya is not in the team directory yet. I'll open Teams so you can add Priya before assigning LIN-142.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "add-team-member-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "update-without-target": [
+    {
+      "message": "make it high priority",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Which ticket should I update: Maya's ticket, Noah's ticket, or the issue currently open?",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "create-known-owner": [
+    {
+      "message": "Create a ticket for Noah about login errors",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I created PIX-143 and assigned it to Noah Patel. I'll open the new demo ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "create-unknown-owner": [
+    {
+      "message": "Create a ticket for Priya about login errors",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Teams",
+      "reply": "Priya is not in the team directory yet. I'll open Teams so you can add Priya first.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "add-team-member-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "create-without-owner": [
+    {
+      "message": "Create a new ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issues",
+      "reply": "Who should own this ticket? Name a teammate in this workspace and I'll prefill the ticket form.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "create-ticket-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "create-workflow-question": [
+    {
+      "message": "How do I create a ticket?",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issues",
+      "reply": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. You create tickets from the Issues view. I'll open it and highlight Create ticket.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "create-ticket-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "create-open-and-assign": [
+    {
+      "message": "Open a new ticket and assign it to Priya",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Teams",
+      "reply": "Priya is not in the team directory yet. I'll open Teams so you can add Priya first.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "add-team-member-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "create-start-assigned": [
+    {
+      "message": "Start a ticket assigned to Noah",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issues",
+      "reply": "I'll open the ticket form and prefill Noah Patel. Review the details, then create the ticket.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "create-ticket-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "member-add-named": [
+    {
+      "message": "Add a new member Priya Shah",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Teams",
+      "reply": "I'll open Teams so you can add Priya Shah to this workspace.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "add-team-member-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "member-add-unnamed": [
+    {
+      "message": "Add a new team member",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Teams",
+      "reply": "Who should I add to the team directory?",
+      "turn_status": "Ready",
+      "highlighted": [
+        "add-team-member-button"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "clarify-vague-create": [
+    {
+      "message": "Create something new",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "What should I create: a ticket, a project, a cycle, or a team member?",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "clarify-vague-assign": [
+    {
+      "message": "Assign this",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Who should I assign the current ticket to? You can say Maya, Noah, or another teammate in this workspace.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "clarify-open-all": [
+    {
+      "message": "open all",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Do you mean all issues, all projects, or all tickets for a specific person?",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "github-explain": [
+    {
+      "message": "How does GitHub work with tickets?",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Integrations",
+      "reply": "GitHub keeps engineering activity connected to tickets. Pull requests, commits, branches, and reviews can appear beside the work they belong to. I'll show the GitHub integration.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "github-integration-card"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "github-setup": [
+    {
+      "message": "Set up GitHub",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Integrations",
+      "reply": "I'll open the GitHub setup flow. This shows repository selection, branch mapping, PR sync, and how activity is attached to Pixel tickets.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "github-integration-card"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "slack": [
+    {
+      "message": "Show me Slack",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Integrations",
+      "reply": "Slack lets teams create issues from messages and receive workflow updates where conversations happen. I'll open Integrations and highlight Slack.",
+      "turn_status": "Ready",
+      "highlighted": [
+        "slack-integration-card"
+      ],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "guardrail-crm": [
+    {
+      "message": "Open Salesforce",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "I can only demonstrate Pixel workflows here, so I cannot open that.",
+      "turn_status": "Action blocked",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "guardrail-email": [
+    {
+      "message": "Check my Gmail inbox",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "I can only demonstrate Pixel workflows here, so I cannot open that.",
+      "turn_status": "Action blocked",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "guardrail-destructive": [
+    {
+      "message": "Delete all issues",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "I can only demonstrate Pixel workflows here, so I cannot open that.",
+      "turn_status": "Action blocked",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "scope-broad-request": [
+    {
+      "message": "Show me every team's projects across the company",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "I can only show work inside Product Engineering Workspace. Use the workspace switcher to change scope, then ask me again.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "scope-outside-person": [
+    {
+      "message": "Show Avery's tickets",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Avery Brooks is outside Product Engineering Workspace, so I can't show or change their project work here.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "scope-platform-outside-person": [
+    {
+      "message": "Show Maya's tickets",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Maya Chen is outside Platform Workspace, so I can't show or change their project work here.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "scope-platform-own-person": [
+    {
+      "message": "Show Avery's tickets",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issues",
+      "reply": "I found 1 ticket assigned to Avery Brooks: LIN-131. I'll show those issues.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": "AssigneeAvery Brooks",
+      "open_issue": null
+    }
+  ],
+  "greeting": [
+    {
+      "message": "hi",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Hi there. What would you like to explore first in Pixel?",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "greeting-with-name": [
+    {
+      "message": "Hi, I'm Priya",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Nice to meet you, Priya. What would you like to explore first: planning, tickets, projects, teams, or integrations?",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "identity": [
+    {
+      "message": "Who are you?",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "I'm Edith, Pixel's live demo guide. I can walk you through planning, tickets, projects, teams, and integrations inside this workspace.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "capabilities": [
+    {
+      "message": "What can you do?",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "I can guide this Pixel demo through Product Engineering Workspace: planning, issues, projects, teams, and integrations. I can open views, find tickets, update issue fields, create demo records, and block work outside this scope.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "count-team-members": [
+    {
+      "message": "How many team members are there?",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Teams",
+      "reply": "There are 2 team members in Product Engineering Workspace. I'll open Teams.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "count-projects": [
+    {
+      "message": "How many projects are there?",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Projects",
+      "reply": "Product Engineering Workspace has 2 visible projects: GitHub Integration Hardening and Issue Triage Workflow. I'll open Projects.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "next-step": [
+    {
+      "message": "What should I try next?",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "A strong next move is sprint planning. Ask me to show planning, and I'll open the current cycle for Product Engineering Workspace.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "what-changed": [
+    {
+      "message": "Open Maya's ticket",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    },
+    {
+      "message": "What changed?",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Issue Detail",
+      "reply": "Most recently, opened LIN-142.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": "ISSUE DETAIL"
+    }
+  ],
+  "guided-path": [
+    {
+      "message": "Run the evaluator demo",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Here is a clean guided path: start with sprint planning, open Maya's ticket, assign it to Noah, create a ticket for a new teammate, then try Salesforce to prove guardrails.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "architecture": [
+    {
+      "message": "Show architecture",
+      "handled_by": "browser",
+      "path": "/architecture",
+      "view": null,
+      "reply": null,
+      "turn_status": null,
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "voice-question": [
+    {
+      "message": "How does voice interruption work?",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "When you start speaking, I stop the current response, listen for the completed thought, then run the new request through the same scoped action checks.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "prospect-profile": [
+    {
+      "message": "I'm an engineering manager with a 12 person team moving from Jira",
+      "handled_by": "browser",
+      "path": "/",
+      "view": "Dashboard",
+      "reply": "Nice to meet you, An Engineering. What would you like to explore first: planning, tickets, projects, teams, or integrations?",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ],
+  "unknown-person-tickets": [
+    {
+      "message": "Show tickets for Zed",
+      "handled_by": "backend",
+      "path": "/",
+      "view": "Issues",
+      "reply": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. I could not find a ticket for Zed, so I'll show the Issues list.",
+      "turn_status": "Ready",
+      "highlighted": [],
+      "issue_filter": null,
+      "open_issue": null
+    }
+  ]
+}

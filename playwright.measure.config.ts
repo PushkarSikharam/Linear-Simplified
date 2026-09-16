@@ -39,6 +39,7 @@ export default defineConfig({
             ...process.env,
             PIXEL_DB_PATH: process.env.PIXEL_MEASURE_DB,
             PIXEL_SYNTHETIC_DEMO: "true",
+            PIXEL_DEMO_SEEDS: "true",
             PIXEL_DEPLOYMENT_ID: "measurement",
             // Authoritative server-side ceiling across every provider attempt in this run.
             PIXEL_TOTAL_ATTEMPT_CAP: ceiling,

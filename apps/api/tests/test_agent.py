@@ -13,13 +13,14 @@ API_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(API_ROOT))
 
 from app import db
-from app.auth import create_token
+from app.auth import AuthUser, create_token
 from app.main import app
 from app.schemas import IntentTrace, TurnRequest
 from app.services.agent import DemoAgent
 from app.services.agent_reasoner import AgentReasoningResult, ReasonedAction
 from app.services.session_manager import SessionManager
-from app.tenancy import deployment_tenant
+
+DEMO_ADMIN = AuthUser(kind="member", user_id="demo-admin", tenant_id="pixel-dev", role="org_admin")
 
 
 class AuthenticatedTestClient:
@@ -64,7 +65,7 @@ class FakeGeminiReasoner:
 
 class AgentApiTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.env_patch = patch.dict(os.environ, {"LLM_ENABLED": "false"})
+        self.env_patch = patch.dict(os.environ, {"LLM_ENABLED": "false", "PIXEL_DEMO_SEEDS": "true"})
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         original_db_path = db.DB_PATH
@@ -84,7 +85,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 1,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "We're using Jira and sprint planning is messy.",
                 "input_mode": "text",
             },
@@ -104,7 +105,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 2,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Open Salesforce and show me opportunities.",
                 "input_mode": "text",
             },
@@ -124,7 +125,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 4,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Open the ticket created for Maya.",
                 "input_mode": "text",
             },
@@ -145,7 +146,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_scope",
                 "turn_id": 1,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "workspace_scope_id": "workspace-platform",
                 "message": "Open the ticket created for Maya.",
                 "input_mode": "text",
@@ -166,7 +167,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_scope",
                 "turn_id": 2,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "workspace_scope_id": "workspace-platform",
                 "message": "Open Avery's ticket.",
                 "input_mode": "text",
@@ -186,7 +187,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_scope",
                 "turn_id": 3,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "workspace_scope_id": "workspace-product-eng",
                 "message": "Assign it to Noah.",
                 "input_mode": "text",
@@ -208,7 +209,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_scope",
                 "turn_id": 4,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "workspace_scope_id": "workspace-platform",
                 "message": "Create a ticket for Avery about migration readiness.",
                 "input_mode": "text",
@@ -297,7 +298,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_persisted_issue",
                 "turn_id": 1,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "All tickets for Maya",
                 "input_mode": "text",
             },
@@ -327,7 +328,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_persisted_member",
                 "turn_id": 1,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Create a ticket for Lucifer about GitHub onboarding",
                 "input_mode": "text",
             },
@@ -345,7 +346,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 12,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Open the tikit for Maya.",
                 "input_mode": "text",
             },
@@ -364,7 +365,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 17,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "All the tickets for Maya which are assigned to her.",
                 "input_mode": "text",
             },
@@ -385,7 +386,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_followup",
                 "turn_id": 1,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "All tickets for Maya.",
                 "input_mode": "text",
             },
@@ -395,7 +396,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_followup",
                 "turn_id": 2,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "What about Noah?",
                 "input_mode": "text",
             },
@@ -414,7 +415,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 20,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Open all the",
                 "input_mode": "text",
             },
@@ -434,7 +435,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 24,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Create something new.",
                 "input_mode": "text",
             },
@@ -453,7 +454,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 28,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Create a ticket.",
                 "input_mode": "text",
             },
@@ -472,7 +473,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 25,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Show me all company projects.",
                 "input_mode": "text",
             },
@@ -491,7 +492,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 27,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "How do you stop speaking when I interrupt you?",
                 "input_mode": "text",
             },
@@ -527,11 +528,12 @@ class AgentApiTest(unittest.TestCase):
             TurnRequest(
                 session_id="session_llm",
                 turn_id=1,
-                product_id="linear_simplified",
+                product_id="linear-demo",
                 message="How do we pick the next batch of work?",
                 input_mode="text",
                 current_page="dashboard",
-            )
+            ),
+            DEMO_ADMIN,
         )
 
         self.assertEqual(response.status, "completed")
@@ -563,11 +565,12 @@ class AgentApiTest(unittest.TestCase):
             TurnRequest(
                 session_id="session_llm_no_override",
                 turn_id=1,
-                product_id="linear_simplified",
+                product_id="linear-demo",
                 message="How does my team plan work week by week?",
                 input_mode="text",
                 current_page="dashboard",
-            )
+            ),
+            DEMO_ADMIN,
         )
 
         self.assertEqual(response.status, "completed")
@@ -598,11 +601,12 @@ class AgentApiTest(unittest.TestCase):
             TurnRequest(
                 session_id="session_llm_guard",
                 turn_id=1,
-                product_id="linear_simplified",
+                product_id="linear-demo",
                 message="Can you pull up our CRM pipeline?",
                 input_mode="text",
                 current_page="dashboard",
-            )
+            ),
+            DEMO_ADMIN,
         )
 
         self.assertEqual(response.status, "denied")
@@ -633,11 +637,12 @@ class AgentApiTest(unittest.TestCase):
             TurnRequest(
                 session_id="session_llm_hard_guard",
                 turn_id=1,
-                product_id="linear_simplified",
+                product_id="linear-demo",
                 message="Can you pull up our Salesforce pipeline?",
                 input_mode="text",
                 current_page="dashboard",
-            )
+            ),
+            DEMO_ADMIN,
         )
 
         self.assertEqual(response.status, "denied")
@@ -668,11 +673,12 @@ class AgentApiTest(unittest.TestCase):
             TurnRequest(
                 session_id="session_llm_email_guard",
                 turn_id=1,
-                product_id="linear_simplified",
+                product_id="linear-demo",
                 message="Can you check my Gmail inbox?",
                 input_mode="text",
                 current_page="dashboard",
-            )
+            ),
+            DEMO_ADMIN,
         )
 
         self.assertEqual(response.status, "denied")
@@ -703,11 +709,12 @@ class AgentApiTest(unittest.TestCase):
             TurnRequest(
                 session_id="session_llm_delete_guard",
                 turn_id=1,
-                product_id="linear_simplified",
+                product_id="linear-demo",
                 message="Can you delete every ticket in this project?",
                 input_mode="text",
                 current_page="issues",
-            )
+            ),
+            DEMO_ADMIN,
         )
 
         self.assertEqual(response.status, "denied")
@@ -721,7 +728,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 13,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "No, not cycles, show issues instead.",
                 "input_mode": "text",
             },
@@ -739,7 +746,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 14,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "How do I assign this issue?",
                 "input_mode": "text",
                 "current_page": "issue_detail",
@@ -759,7 +766,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 5,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Open the ticket created for Alex.",
                 "input_mode": "text",
             },
@@ -778,7 +785,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 15,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Open a fresh ticket for Maya.",
                 "input_mode": "text",
             },
@@ -799,7 +806,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 24,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Create a ticket for Lucifer.",
                 "input_mode": "text",
             },
@@ -819,7 +826,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 25,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Assign it to Noah",
                 "input_mode": "text",
                 "selected_issue_id": "LIN-142",
@@ -840,7 +847,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 26,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Make it high priority",
                 "input_mode": "text",
                 "selected_issue_id": "LIN-137",
@@ -860,7 +867,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 16,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Show me how to create a ticket.",
                 "input_mode": "text",
             },
@@ -878,7 +885,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 22,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "So what is the best way to create a ticket?",
                 "input_mode": "text",
             },
@@ -896,7 +903,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 6,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "How do I assign Maya's ticket to one developer?",
                 "input_mode": "text",
             },
@@ -918,7 +925,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 7,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "How does the GitHub integration work?",
                 "input_mode": "text",
             },
@@ -936,7 +943,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 29,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Open the system architecture.",
                 "input_mode": "text",
             },
@@ -955,7 +962,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 23,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "What can Pixel do with Slack?",
                 "input_mode": "text",
             },
@@ -974,7 +981,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 21,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Set up the GitHub integration.",
                 "input_mode": "text",
             },
@@ -993,7 +1000,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 8,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Show me team capacity and workload.",
                 "input_mode": "text",
             },
@@ -1011,7 +1018,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 18,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "How many team members are there?",
                 "input_mode": "text",
             },
@@ -1029,7 +1036,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 19,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Are you capable of doing?",
                 "input_mode": "text",
             },
@@ -1047,7 +1054,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 3,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Show bug tracking.",
                 "input_mode": "text",
             },
@@ -1064,9 +1071,7 @@ class AgentApiTest(unittest.TestCase):
     def test_cancel_active_turn(self) -> None:
         sessions = SessionManager()
         # The API client is signed in as demo-admin, so the session must belong to that user.
-        sessions.ensure_session(
-            "session_test", "linear_simplified", user_id="demo-admin", tenant_id=deployment_tenant().tenant_id
-        )
+        sessions.ensure_session("session_test", "linear-demo", user_id="demo-admin", tenant_id="pixel-dev")
         self.assertTrue(sessions.activate_turn("session_test", 9))
 
         response = self.client.post(
@@ -1084,7 +1089,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 11,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Show sprint planning.",
                 "input_mode": "text",
             },
@@ -1094,7 +1099,7 @@ class AgentApiTest(unittest.TestCase):
             json={
                 "session_id": "session_test",
                 "turn_id": 10,
-                "product_id": "linear_simplified",
+                "product_id": "linear-demo",
                 "message": "Show bug tracking.",
                 "input_mode": "text",
             },

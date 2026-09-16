@@ -10,6 +10,8 @@ export type HybridVoiceCallbacks = {
   onUserTranscript: (text: string, isFinal: boolean) => void;
   onAgentSpeech: (text: string) => void;
   onError: (errorMsg: string) => void;
+  /** Product whose Pixel is speaking; the API authorizes and bills speech against it. */
+  productId: string;
   /** Conversation the spoken text belongs to, for usage attribution. */
   getSessionId?: () => string | undefined;
 };
@@ -296,7 +298,11 @@ export class HybridVoiceEngine {
     return authorizedFetch(apiUrl("/speech"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, session_id: this.callbacks.getSessionId?.() }),
+      body: JSON.stringify({
+        text,
+        product_id: this.callbacks.productId,
+        session_id: this.callbacks.getSessionId?.()
+      }),
       signal
     });
   }

@@ -13,7 +13,8 @@ export type ProductConfig = {
 };
 
 export const productConfig: ProductConfig = {
-  id: "linear_simplified",
+  // The organization's product, not the Product Definition it runs on.
+  id: "linear-demo",
   name: "Pixel",
   docsPath: "docs/product",
   pages: [

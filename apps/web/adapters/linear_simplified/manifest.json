@@ -1,0 +1,8 @@
+{
+  "definition_id": "linear_simplified",
+  "views": {
+    "integrations": {
+      "controls": ["github_card", "slack_card", "github_setup"]
+    }
+  }
+}

@@ -3,7 +3,14 @@ from __future__ import annotations
 import re
 
 from app.auth import AuthUser
-from app.product_config import PRODUCTS_BY_ID
+from app.definitions.access import AccessDenied, ProductAccess, authorize_product
+from app.definitions.organizations import OrganizationDirectory
+from app.definitions.sessions import (
+    DefinitionUnavailable,
+    SessionEnded,
+    check_pinned_session,
+    pin_new_session,
+)
 from app.schemas import (
     IntentTrace,
     ProposedAction,
@@ -43,13 +50,17 @@ class DemoAgent:
         self.llm_reasoner = AgentReasoner()
         self.conversation_manager = ConversationManager()
         self.retriever = ProductRetriever()
+        self.directory = OrganizationDirectory()
 
-    def handle_turn(self, request: TurnRequest, owner: AuthUser | None = None) -> TurnResponse:
-        if request.product_id not in PRODUCTS_BY_ID:
+    def handle_turn(self, request: TurnRequest, principal: AuthUser) -> TurnResponse:
+        """Run one turn of the Pixel for the product the principal is allowed to use."""
+        try:
+            access = authorize_product(principal, request.product_id, self.directory)
+        except AccessDenied as denied:
             return self._denied_response(
                 request,
-                "I can only run demos for the configured product.",
-                reason="Denied because the requested product is not configured.",
+                "That product is not available to you.",
+                reason=f"Denied because the product cannot be used ({denied.reason}).",
             )
 
         workspace_scope = get_workspace_scope(request.workspace_scope_id)
@@ -60,18 +71,40 @@ class DemoAgent:
                 reason="Denied because the requested workspace scope is not configured.",
             )
 
+        # A new session pins the product's current definition; an existing one keeps its pin.
+        pin = None
+        if not self.sessions.exists(request.session_id):
+            try:
+                pin = pin_new_session(access, self.directory.definitions)
+            except DefinitionUnavailable as unavailable:
+                return self._denied_response(
+                    request,
+                    "This product is not available right now. Please try again later.",
+                    reason=f"Denied because no session can start ({unavailable.reason}).",
+                )
+
         if not self.sessions.ensure_session(
             request.session_id,
             request.product_id,
-            user_id=owner.user_id if owner else None,
-            tenant_id=owner.tenant_id if owner else None,
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
             scope_id=request.workspace_scope_id,
+            pin=pin,
         ):
             return self._denied_response(
                 request,
                 "This conversation belongs to someone else. Start a new session to continue.",
                 reason="Denied because the session is owned by another user or product.",
             )
+        try:
+            session_pin = check_pinned_session(self.sessions.pin_for(request.session_id), self.directory)
+        except SessionEnded as ended:
+            return self._denied_response(
+                request,
+                "This conversation has ended. Start a new conversation to continue.",
+                reason=f"Denied because the session ended ({ended.reason}).",
+            )
+        definition_id = session_pin.definition_id
         if not self.sessions.activate_turn(request.session_id, request.turn_id):
             return self._stale_response(
                 request,
@@ -150,7 +183,9 @@ class DemoAgent:
                 request,
                 normalized_message,
                 workspace_scope,
-                owner.user_id if owner else None,
+                principal.user_id,
+                access,
+                definition_id,
             )
             if llm_result:
                 intent_trace, signals, proposed_action = self._apply_llm_result(
@@ -173,7 +208,9 @@ class DemoAgent:
                 request,
                 normalized_message,
                 workspace_scope,
-                owner.user_id if owner else None,
+                principal.user_id,
+                access,
+                definition_id,
             )
             if llm_result:
                 intent_trace, signals, proposed_action = self._apply_llm_result(
@@ -182,7 +219,7 @@ class DemoAgent:
                 )
 
         validated_action = self.action_validator.validate(
-            request.product_id,
+            definition_id,
             proposed_action,
             request.workspace_scope_id,
         )
@@ -195,7 +232,7 @@ class DemoAgent:
         elif llm_retrieved_docs:
             retrieved_docs = llm_retrieved_docs
         else:
-            retrieved_docs = self.retriever.retrieve(request.product_id, normalized_message)
+            retrieved_docs = self.retriever.retrieve(definition_id, normalized_message)
 
         if not self.sessions.is_active_turn(request.session_id, request.turn_id):
             return self._stale_response(
@@ -347,7 +384,7 @@ class DemoAgent:
             retrieved_context=[],
             session_summary=(
                 self.sessions.session_summary(request.session_id)
-                if request.product_id in PRODUCTS_BY_ID
+                if self.sessions.exists(request.session_id)
                 else SessionSummary()
             ),
         )
@@ -558,16 +595,19 @@ class DemoAgent:
         request: TurnRequest,
         normalized_message: str,
         workspace_scope: WorkspaceScope,
-        user_id: str | None = None,
+        user_id: str,
+        access: ProductAccess,
+        definition_id: str,
     ) -> tuple[AgentReasoningResult | None, list[RetrievedDocument]]:
         # Per-session, per-user and per-deployment limits are enforced by the usage ledger.
         if not self.llm_reasoner.enabled():
             return None, []
 
-        retrieved_docs = self.retriever.retrieve(request.product_id, normalized_message)
+        retrieved_docs = self.retriever.retrieve(definition_id, normalized_message)
         llm_result = self.llm_reasoner.reason(
             AgentReasoningContext(
-                product_id=request.product_id,
+                owner=access.context,
+                definition_id=definition_id,
                 message=request.message,
                 current_page=request.current_page,
                 selected_issue_id=request.selected_issue_id,

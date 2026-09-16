@@ -57,6 +57,8 @@ py -m venv .venv
 .venv\Scripts\python -m uvicorn app.main:app --app-dir apps\api --reload --port 8001
 ```
 
+The local demo needs `PIXEL_SYNTHETIC_DEMO=true` and `PIXEL_DEMO_SEEDS=true` in the API environment (see `.env.example`). Without `PIXEL_DEMO_SEEDS=true`, no demo organization, team, users or product are created, so demo login finds no users.
+
 The browser defaults to the app's local API bridge. The workspace and assistant are designed to run as one local demo experience.
 
 Azure voice setup:

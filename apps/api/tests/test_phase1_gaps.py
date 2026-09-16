@@ -27,7 +27,7 @@ from app.workspace_config import get_workspace_scope
 
 class PhaseOneGapTest(unittest.TestCase):
     def setUp(self):
-        env_patch = patch.dict(os.environ, {"LLM_ENABLED": "false"})
+        env_patch = patch.dict(os.environ, {"LLM_ENABLED": "false", "PIXEL_DEMO_SEEDS": "true"})
         env_patch.start()
         self.addCleanup(env_patch.stop)
         temporary = tempfile.TemporaryDirectory()
@@ -278,7 +278,7 @@ class PhaseOneGapTest(unittest.TestCase):
 
     def test_gap_05_cancelling_old_turn_keeps_newer_turn(self):
         sessions = SessionManager()
-        sessions.ensure_session("session-race", "linear_simplified")
+        sessions.ensure_session("session-race", "linear-demo")
         self.assertTrue(sessions.activate_turn("session-race", 1))
         self.assertTrue(sessions.activate_turn("session-race", 2))
         self.assertFalse(sessions.cancel_turn("session-race", 1))
@@ -399,7 +399,7 @@ def _cycle(**overrides) -> dict:
 
 def _turn(session_id: str, turn_id: int = 1, workspace_scope_id: str = "workspace-product-eng") -> dict:
     return {
-        "session_id": session_id, "turn_id": turn_id, "product_id": "linear_simplified",
+        "session_id": session_id, "turn_id": turn_id, "product_id": "linear-demo",
         "message": "show me the issues", "workspace_scope_id": workspace_scope_id,
     }
 

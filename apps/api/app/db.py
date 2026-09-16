@@ -29,6 +29,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 def migrate() -> None:
     _drop_unowned_usage_table()
+    _drop_superseded_draft_tables()
     with get_connection() as connection:
         connection.executescript(
             """
@@ -59,12 +60,88 @@ def migrate() -> None:
               response_body text not null
             );
 
+            -- Logical tenancy: Organization -> Team -> Product. tenant_id is the organization.
+            create table if not exists organizations(
+              tenant_id text primary key,
+              name text not null,
+              state text not null check (state in ('active', 'suspended')),
+              created_at text not null
+            );
+            create table if not exists teams(
+              tenant_id text not null references organizations(tenant_id),
+              team_id text not null,
+              name text not null,
+              state text not null check (state in ('active', 'disabled')),
+              created_at text not null,
+              primary key (tenant_id, team_id)
+            );
+            -- Organization users. Visitors are not members and never appear here.
+            create table if not exists memberships(
+              tenant_id text not null references organizations(tenant_id),
+              user_id text not null,
+              role text not null check (role in ('org_admin', 'team_admin', 'team_member')),
+              team_id text,
+              primary key (tenant_id, user_id),
+              foreign key (tenant_id, team_id) references teams(tenant_id, team_id),
+              check ((role = 'org_admin') = (team_id is null))
+            );
+
+            -- Definition versions may be bound by many products, so their lifecycle is global.
+            -- Ownership is copied from the immutable definition file.
+            create table if not exists definition_versions(
+              definition_id text not null,
+              version integer not null,
+              checksum text not null,
+              ownership text not null check (ownership in ('platform_shared', 'organization_private')),
+              owner_tenant_id text,
+              state text not null
+                check (state in ('draft', 'validated', 'published', 'retired', 'revoked')),
+              registered_at text not null,
+              validated_at text,
+              published_at text,
+              retired_at text,
+              revoked_at text,
+              primary key (definition_id, version),
+              check ((ownership = 'organization_private') = (owner_tenant_id is not null))
+            );
+
+            -- One product's Pixel: owned by one team, bound to one definition and knowledge version.
+            create table if not exists product_bindings(
+              tenant_id text not null,
+              product_id text not null,
+              team_id text not null,
+              definition_id text not null,
+              definition_version integer not null,
+              definition_checksum text not null,
+              knowledge_version integer not null,
+              knowledge_checksum text,
+              state text not null check (state in ('active', 'disabled')),
+              visitor_access integer not null default 0,
+              settings_json text not null default '{}',
+              updated_at text not null,
+              primary key (tenant_id, product_id),
+              foreign key (tenant_id, team_id) references teams(tenant_id, team_id),
+              foreign key (definition_id, definition_version)
+                references definition_versions(definition_id, version)
+            );
+
+            -- Visitor sessions grant access to exactly one product and nothing else.
+            create table if not exists visitor_logins(
+              token_hash text primary key,
+              visitor_id text not null,
+              tenant_id text not null,
+              product_id text not null,
+              expires_at real not null,
+              foreign key (tenant_id, product_id) references product_bindings(tenant_id, product_id)
+            );
+
             -- One row per paid-provider attempt, including blocked ones, owned by a
             -- tenant/product/deployment. Metadata only: never prompts, generated audio,
             -- credentials or provider error bodies.
             create table if not exists provider_attempts(
               attempt_id text primary key,
               tenant_id text not null,
+              team_id text,
               product_id text not null,
               deployment_id text not null,
               user_id text not null,
@@ -204,6 +281,14 @@ def migrate() -> None:
         }
         if "latest_turn_id" not in columns:
             connection.execute("alter table sessions add column latest_turn_id integer")
+        # Sessions pin their product and the exact definition and knowledge versions.
+        for column, column_type in _SESSION_PIN_COLUMNS.items():
+            if column not in columns:
+                connection.execute(f"alter table sessions add column {column} {column_type}")
+        # Usage rows record the owning team at attempt time (added after Milestone 2).
+        usage_columns = {row["name"] for row in connection.execute("pragma table_info(provider_attempts)")}
+        if "team_id" not in usage_columns:
+            connection.execute("alter table provider_attempts add column team_id text")
 
     _add_project_foreign_keys()
 
@@ -213,6 +298,20 @@ def migrate() -> None:
     # Seed demo auth users after schema is ready.
     from app.auth import seed_demo_users
     seed_demo_users()
+
+    from app.definitions.bootstrap import load_demo_seeds
+    load_demo_seeds()
+
+
+_SESSION_PIN_COLUMNS = {
+    "tenant_id": "text",
+    "team_id": "text",
+    "definition_id": "text",
+    "definition_version": "integer",
+    "definition_checksum": "text",
+    "knowledge_version": "integer",
+    "expires_at": "text",
+}
 
 
 # Table definitions used to rebuild databases created before project links existed.
@@ -266,6 +365,17 @@ def _drop_unowned_usage_table() -> None:
     backup_database()
     with get_connection() as connection:
         connection.execute("drop table provider_attempts")
+
+
+def _drop_superseded_draft_tables() -> None:
+    """Remove tables from the first, unreleased 3.1 draft (single tenant and product per deployment)."""
+    with get_connection() as connection:
+        connection.executescript(
+            """
+            drop table if exists tenant_product_bindings;
+            drop table if exists product_definition_versions;
+            """
+        )
 
 
 def backup_database() -> Path | None:

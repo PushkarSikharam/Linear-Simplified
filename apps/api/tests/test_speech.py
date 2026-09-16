@@ -16,7 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 from app import main
-from app.auth import create_token
+from app.auth import create_token, create_visitor_token
+from app.definitions.access import AccessDenied, authorize_product
+from app.definitions.organizations import OrganizationDirectory
+from app.definitions.sessions import pin_new_session
 from app.services import http_client
 from app.services import usage_ledger as ledger_module
 from app.services.session_manager import SessionManager
@@ -30,7 +33,7 @@ from app.services.speech_providers import (
     pcm_to_wav,
 )
 from app.services.speech_service import SpeechService, SpeechUnavailable
-from test_usage_ledger import LedgerFixture, OTHER_TENANT, SECRET_MESSAGE
+from test_usage_ledger import ORG_ADMIN, LedgerFixture, OTHER_TENANT, SECRET_MESSAGE
 
 
 @dataclass
@@ -62,10 +65,10 @@ class Clock:
 
 class SpeechServiceTest(LedgerFixture):
     def service(self, *providers: FakeProvider, clock=None) -> SpeechService:
-        return SpeechService(self.ledger, providers=lambda tenant: list(providers), clock=clock or Clock())
+        return SpeechService(self.ledger, providers=lambda tenant, style: list(providers), clock=clock or Clock())
 
     def synthesize(self, service: SpeechService, tenant=None, text="Hello there"):
-        return service.synthesize(tenant=tenant or self.tenant, user_id="demo-product-eng",
+        return service.synthesize(tenant=tenant or self.tenant, voice_style="Calm.", user_id="demo-product-eng",
                                   session_id="session-1", text=text)
 
     def test_success_is_reserved_first_and_attributed(self):
@@ -142,7 +145,7 @@ class SpeechServiceTest(LedgerFixture):
         self.assertEqual(unavailable.exception.reason, "attempt_too_large")
         self.assertEqual(azure.calls, [])
 
-    def test_provider_backoff_is_honoured_per_tenant(self):
+    def test_provider_backoff_is_honoured_per_organization_and_product(self):
         clock = Clock()
         gemini = FakeProvider("gemini", [
             SpeechProviderError("failed", "http_429", retry_after_seconds=5),
@@ -155,7 +158,7 @@ class SpeechServiceTest(LedgerFixture):
         with self.assertRaises(SpeechUnavailable) as cooling:
             self.synthesize(service)
         self.assertEqual(cooling.exception.reason, "no_provider_available")
-        self.synthesize(service, tenant=OTHER_TENANT)  # other tenants are unaffected
+        self.synthesize(service, tenant=OTHER_TENANT)  # other organizations are unaffected
         clock.now += 6
         self.synthesize(service)
         self.assertEqual(len(gemini.calls), 3)
@@ -178,9 +181,9 @@ class SpeechProvidersTest(LedgerFixture):
     def test_configured_providers_follow_fallback_order(self):
         os.environ.update({"AZURE_SPEECH_KEY": "a", "AZURE_SPEECH_REGION": "eastus",
                            "GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"})
-        providers = configured_speech_providers(self.tenant)
+        providers = configured_speech_providers(self.tenant, "Speak warmly.")
         self.assertEqual([provider.name for provider in providers], ["azure", "gemini", "openai"])
-        self.assertIn("Edith", providers[1].style, "the voice persona comes from the product profile")
+        self.assertEqual(providers[1].style, "Speak warmly.")
 
     def test_azure_escapes_text_into_ssml(self):
         ssml = AzureSpeech("k", "eastus", "en-US-Ava:DragonHDLatestNeural", "fmt").ssml('<break/> & "quotes"')
@@ -226,16 +229,27 @@ class SpeechEndpointTest(LedgerFixture):
     def setUp(self):
         super().setUp()
         self.azure = FakeProvider("azure", [audio("azure-speech")])
-        service_patch = patch.object(
-            main, "speech_service", SpeechService(self.ledger, providers=lambda tenant: [self.azure])
-        )
+        self.voice_styles: list[str] = []
+
+        def providers(tenant, voice_style):
+            self.voice_styles.append(voice_style)
+            return [self.azure]
+
+        service_patch = patch.object(main, "speech_service", SpeechService(self.ledger, providers=providers))
         service_patch.start()
         self.addCleanup(service_patch.stop)
         self.client = TestClient(main.app, raise_server_exceptions=False)
 
-    def post(self, body, user_id="demo-product-eng"):
-        headers = {"Authorization": f"Bearer {create_token(user_id)}"}
-        return self.client.post("/api/speech", json=body, headers=headers)
+    def post(self, body, user_id="demo-product-eng", token=None):
+        headers = {"Authorization": f"Bearer {token or create_token(user_id)}"}
+        return self.client.post("/api/speech", json={"product_id": "linear-demo", **body}, headers=headers)
+
+    def add_other_product(self, visitor_access=False):
+        directory = OrganizationDirectory()
+        directory.create_team("pixel-dev", "other-team", "Other")
+        directory.bind_product("pixel-dev", "other-desk", "other-team", "linear_simplified", 1,
+                               visitor_access=visitor_access)
+        return directory
 
     def test_returns_private_audio_with_provider_headers(self):
         response = self.post({"text": "  Hello there  "})
@@ -246,9 +260,28 @@ class SpeechEndpointTest(LedgerFixture):
         self.assertEqual((response.headers["x-tts-engine"], response.headers["x-tts-voice"]),
                          ("azure-speech", "fake-voice"))
         self.assertEqual(self.azure.calls, ["Hello there"])
+        self.assertIn("Edith", self.voice_styles[0], "the voice persona comes from the product's definition")
+        row = self.rows()[0]
+        self.assertEqual((row["tenant_id"], row["team_id"], row["product_id"]),
+                         ("pixel-dev", "planning-team", "linear-demo"))
+
+    def test_speech_is_authorized_per_product(self):
+        self.add_other_product()
+        self.assertEqual(self.post({"text": "Hello", "product_id": "other-desk"}).status_code, 404)
+        self.assertEqual(self.post({"text": "Hello", "product_id": "missing"}).status_code, 404)
+        admin = {"Authorization": f"Bearer {create_token('demo-admin')}"}
+        response = self.client.post("/api/speech", json={"text": "Hello"}, headers=admin)
+        self.assertEqual(response.status_code, 422, "a product is required")
+        with self.assertRaises(AccessDenied):
+            create_visitor_token("pixel-dev", "other-desk")  # this product accepts no visitors
+        visitor = create_visitor_token("pixel-dev", "linear-demo")[0]
+        self.assertEqual(self.post({"text": "Hello", "product_id": "other-desk"}, token=visitor).status_code, 404)
+        self.assertEqual(self.azure.calls, [])
+        self.assertEqual(self.post({"text": "Hello"}, token=visitor).status_code, 200)
 
     def test_requires_authentication(self):
-        self.assertEqual(self.client.post("/api/speech", json={"text": "Hello"}).status_code, 401)
+        response = self.client.post("/api/speech", json={"text": "Hello", "product_id": "linear-demo"})
+        self.assertEqual(response.status_code, 401)
 
     def test_rejects_blank_or_oversized_text(self):
         self.assertEqual(self.post({"text": "   "}).status_code, 422)
@@ -262,13 +295,18 @@ class SpeechEndpointTest(LedgerFixture):
         self.assertEqual(response.json()["reason"], "providers_disabled")
 
     def test_only_the_callers_own_session_is_attributed(self):
-        sessions = SessionManager()
-        sessions.ensure_session("mine", "linear_simplified", user_id="demo-product-eng", tenant_id="pixel-dev")
-        sessions.ensure_session("theirs", "linear_simplified", user_id="demo-platform", tenant_id="pixel-dev")
-        self.azure.outcomes.append(audio("azure-speech"))
-        self.post({"text": "Hello", "session_id": "mine"})
-        self.post({"text": "Hello", "session_id": "theirs"})
-        self.assertEqual([row["session_id"] for row in self.rows()], ["mine", None])
+        sessions, directory = SessionManager(), self.add_other_product()
+        for session_id, user_id, product_id in (
+            ("mine", "demo-product-eng", "linear-demo"),
+            ("theirs", "demo-platform", "linear-demo"),
+            ("mine-elsewhere", "demo-product-eng", "other-desk"),
+        ):
+            pin = pin_new_session(authorize_product(ORG_ADMIN, product_id, directory))
+            sessions.ensure_session(session_id, product_id, user_id=user_id, tenant_id="pixel-dev", pin=pin)
+        self.azure.outcomes.extend([audio("azure-speech"), audio("azure-speech")])
+        for session_id in ("mine", "theirs", "mine-elsewhere"):
+            self.post({"text": "Hello", "session_id": session_id})
+        self.assertEqual([row["session_id"] for row in self.rows()], ["mine", None, None])
 
     def test_spoken_text_never_reaches_the_logs(self):
         with self.assertLogs("pixel.usage", level="INFO") as logs:

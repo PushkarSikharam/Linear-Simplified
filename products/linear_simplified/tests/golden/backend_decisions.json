@@ -1,0 +1,1273 @@
+{
+  "nav-sprint-planning": [
+    {
+      "message": "How does sprint planning work?",
+      "status": "completed",
+      "speech": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "proposed_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "relevant_feature": "Cycles",
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "teams.md"
+      ]
+    }
+  ],
+  "nav-week-by-week": [
+    {
+      "message": "How should my team plan work week by week?",
+      "status": "completed",
+      "speech": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "proposed_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "relevant_feature": "Cycles",
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "teams.md"
+      ]
+    }
+  ],
+  "nav-issues": [
+    {
+      "message": "Show me the issues",
+      "status": "completed",
+      "speech": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. I'll open Issues.",
+      "proposed_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "nav-roadmap": [
+    {
+      "message": "Where do I see roadmap progress?",
+      "status": "completed",
+      "speech": "Projects group related issues into larger product or roadmap efforts. I'll open Projects.",
+      "proposed_action": {
+        "type": "OPEN_PROJECTS",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_PROJECTS",
+        "payload": {}
+      },
+      "relevant_feature": "Projects",
+      "clarification_pending": null,
+      "sources": [
+        "projects.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "nav-team-workload": [
+    {
+      "message": "Show team workload",
+      "status": "completed",
+      "speech": "Teams represent engineering groups, ownership boundaries, and capacity. I'll open Teams.",
+      "proposed_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "relevant_feature": "Teams",
+      "clarification_pending": null,
+      "sources": [
+        "teams.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "nav-integrations": [
+    {
+      "message": "What integrations do you support?",
+      "status": "completed",
+      "speech": "Integrations connect Pixel with tools used by engineering teams. I'll open Integrations.",
+      "proposed_action": {
+        "type": "OPEN_INTEGRATIONS",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_INTEGRATIONS",
+        "payload": {}
+      },
+      "relevant_feature": "Integrations",
+      "clarification_pending": null,
+      "sources": [
+        "integrations.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "typo-cycles": [
+    {
+      "message": "show me the cicles",
+      "status": "completed",
+      "speech": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "proposed_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "relevant_feature": "Cycles",
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "teams.md"
+      ]
+    }
+  ],
+  "typo-ticket": [
+    {
+      "message": "open mayas tiket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "correction-clause": [
+    {
+      "message": "show me projects, actually I mean cycles",
+      "status": "completed",
+      "speech": "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
+      "proposed_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_CYCLES",
+        "payload": {}
+      },
+      "relevant_feature": "Cycles",
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "teams.md"
+      ]
+    }
+  ],
+  "correction-negation": [
+    {
+      "message": "not cycles, show me the issues",
+      "status": "completed",
+      "speech": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. I'll open Issues.",
+      "proposed_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "person-ticket": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "person-all-tickets": [
+    {
+      "message": "Show all tickets for Maya",
+      "status": "completed",
+      "speech": "I found 1 ticket assigned to Maya Chen: LIN-142. I'll show the filtered issue list.",
+      "proposed_action": {
+        "type": "FILTER_ISSUES_BY_ASSIGNEE",
+        "payload": {
+          "assignee": "Maya Chen"
+        }
+      },
+      "validated_action": {
+        "type": "FILTER_ISSUES_BY_ASSIGNEE",
+        "payload": {
+          "assignee": "Maya Chen"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "projects.md"
+      ]
+    }
+  ],
+  "person-follow-up": [
+    {
+      "message": "Show me the issues",
+      "status": "completed",
+      "speech": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. I'll open Issues.",
+      "proposed_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "what about Noah",
+      "status": "completed",
+      "speech": "I found 1 ticket assigned to Noah Patel: LIN-137. I'll show the filtered issue list.",
+      "proposed_action": {
+        "type": "FILTER_ISSUES_BY_ASSIGNEE",
+        "payload": {
+          "assignee": "Noah Patel"
+        }
+      },
+      "validated_action": {
+        "type": "FILTER_ISSUES_BY_ASSIGNEE",
+        "payload": {
+          "assignee": "Noah Patel"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "current-ticket": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "open this ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "assignment-workflow": [
+    {
+      "message": "How do I assign a ticket?",
+      "status": "completed",
+      "speech": "Assignment is handled from the issue detail panel. I'll open LIN-142 and highlight the assignee control for Maya Chen.",
+      "proposed_action": {
+        "type": "HIGHLIGHT_ASSIGNMENT_CONTROL",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "HIGHLIGHT_ASSIGNMENT_CONTROL",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "update-reassign": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "assign it to Noah",
+      "status": "completed",
+      "speech": "Done. I updated LIN-142: assignee is now Noah Patel.",
+      "proposed_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "assignee": "Noah Patel"
+        }
+      },
+      "validated_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "assignee": "Noah Patel"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "update-priority": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "make it high priority",
+      "status": "completed",
+      "speech": "Done. I updated LIN-142: priority is now High.",
+      "proposed_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "priority": "High"
+        }
+      },
+      "validated_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "priority": "High"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "update-status": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "mark it done",
+      "status": "completed",
+      "speech": "Done. I updated LIN-142: status is now Done.",
+      "proposed_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "status": "Done"
+        }
+      },
+      "validated_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "status": "Done"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "projects.md"
+      ]
+    }
+  ],
+  "update-outside-person": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "assign it to Avery",
+      "status": "denied",
+      "speech": "Avery Brooks is outside Product Engineering Workspace, so I cannot show or change that work here.",
+      "proposed_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "assignee": "Avery Brooks"
+        }
+      },
+      "validated_action": null,
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "update-unknown-person": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "assign it to Priya",
+      "status": "denied",
+      "speech": "That work is outside Product Engineering Workspace, so I cannot show or change it here.",
+      "proposed_action": {
+        "type": "UPDATE_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142",
+          "assignee": "Priya"
+        }
+      },
+      "validated_action": null,
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "update-without-target": [
+    {
+      "message": "make it high priority",
+      "status": "completed",
+      "speech": "I can help demonstrate planning, issues, projects, teams, and integrations in this product.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "create-known-owner": [
+    {
+      "message": "Create a ticket for Noah about login errors",
+      "status": "completed",
+      "speech": "I created PIX-143 and assigned it to Noah Patel. I'll open the new demo ticket.",
+      "proposed_action": {
+        "type": "CREATE_DEMO_ISSUE",
+        "payload": {
+          "id": "PIX-143",
+          "title": "Login errors",
+          "priority": "Medium",
+          "assignee": "Noah Patel",
+          "project": "Issue Triage",
+          "status": "Todo"
+        }
+      },
+      "validated_action": {
+        "type": "CREATE_DEMO_ISSUE",
+        "payload": {
+          "id": "PIX-143",
+          "title": "Login errors",
+          "priority": "Medium",
+          "assignee": "Noah Patel",
+          "project": "Issue Triage",
+          "status": "Todo"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "create-unknown-owner": [
+    {
+      "message": "Create a ticket for Priya about login errors",
+      "status": "completed",
+      "speech": "Priya is not in the team directory yet. I'll open Teams so you can add Priya first.",
+      "proposed_action": {
+        "type": "HIGHLIGHT_ADD_MEMBER_BUTTON",
+        "payload": {
+          "name": "Priya"
+        }
+      },
+      "validated_action": {
+        "type": "HIGHLIGHT_ADD_MEMBER_BUTTON",
+        "payload": {
+          "name": "Priya"
+        }
+      },
+      "relevant_feature": "Teams",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "create-without-owner": [
+    {
+      "message": "Create a new ticket",
+      "status": "completed",
+      "speech": "Who should own this ticket? Name a teammate in this workspace and I'll prepare the form.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": "Dashboard",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "create-workflow-question": [
+    {
+      "message": "How do I create a ticket?",
+      "status": "completed",
+      "speech": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. You create tickets from the Issues view. I'll open it and highlight Create ticket.",
+      "proposed_action": {
+        "type": "HIGHLIGHT_CREATE_TICKET_BUTTON",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "HIGHLIGHT_CREATE_TICKET_BUTTON",
+        "payload": {}
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "create-open-and-assign": [
+    {
+      "message": "Open a new ticket and assign it to Priya",
+      "status": "completed",
+      "speech": "I created PIX-143 and assigned it to Maya Chen. I'll open the new demo ticket.",
+      "proposed_action": {
+        "type": "CREATE_DEMO_ISSUE",
+        "payload": {
+          "id": "PIX-143",
+          "title": "Investigate customer onboarding issue",
+          "priority": "Medium",
+          "assignee": "Maya Chen",
+          "project": "Issue Triage",
+          "status": "Todo"
+        }
+      },
+      "validated_action": {
+        "type": "CREATE_DEMO_ISSUE",
+        "payload": {
+          "id": "PIX-143",
+          "title": "Investigate customer onboarding issue",
+          "priority": "Medium",
+          "assignee": "Maya Chen",
+          "project": "Issue Triage",
+          "status": "Todo"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "create-start-assigned": [
+    {
+      "message": "Start a ticket assigned to Noah",
+      "status": "completed",
+      "speech": "I found LIN-137, assigned to Noah Patel. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-137"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-137"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "member-add-named": [
+    {
+      "message": "Add a new member Priya Shah",
+      "status": "completed",
+      "speech": "I can help demonstrate planning, issues, projects, teams, and integrations in this product.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "member-add-unnamed": [
+    {
+      "message": "Add a new team member",
+      "status": "completed",
+      "speech": "Teams represent engineering groups, ownership boundaries, and capacity. I'll open Teams.",
+      "proposed_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "relevant_feature": "Teams",
+      "clarification_pending": null,
+      "sources": [
+        "teams.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "clarify-vague-create": [
+    {
+      "message": "Create something new",
+      "status": "completed",
+      "speech": "What should I create: a ticket, a project, a cycle, or a team member?",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": "Dashboard",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "clarify-vague-assign": [
+    {
+      "message": "Assign this",
+      "status": "completed",
+      "speech": "Who should I assign the current ticket to? You can name someone in this workspace.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": "Dashboard",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "clarify-open-all": [
+    {
+      "message": "open all",
+      "status": "completed",
+      "speech": "Do you mean all issues, all projects, or all tickets for a specific person?",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": "all_items",
+      "sources": []
+    }
+  ],
+  "github-explain": [
+    {
+      "message": "How does GitHub work with tickets?",
+      "status": "completed",
+      "speech": "GitHub keeps pull requests, commits, and issue references connected to the work. I'll open Integrations and highlight GitHub.",
+      "proposed_action": {
+        "type": "HIGHLIGHT_GITHUB_CARD",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "HIGHLIGHT_GITHUB_CARD",
+        "payload": {}
+      },
+      "relevant_feature": "Integrations",
+      "clarification_pending": null,
+      "sources": [
+        "integrations.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "github-setup": [
+    {
+      "message": "Set up GitHub",
+      "status": "completed",
+      "speech": "Integrations connect Pixel with tools used by engineering teams. I'll open the GitHub setup flow and show the connection steps.",
+      "proposed_action": {
+        "type": "OPEN_GITHUB_SETUP",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_GITHUB_SETUP",
+        "payload": {}
+      },
+      "relevant_feature": "Integrations",
+      "clarification_pending": null,
+      "sources": [
+        "integrations.md"
+      ]
+    }
+  ],
+  "slack": [
+    {
+      "message": "Show me Slack",
+      "status": "completed",
+      "speech": "Slack lets teams create issues from messages and receive workflow updates where conversations happen. I'll open Integrations and highlight Slack.",
+      "proposed_action": {
+        "type": "HIGHLIGHT_SLACK_CARD",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "HIGHLIGHT_SLACK_CARD",
+        "payload": {}
+      },
+      "relevant_feature": "Integrations",
+      "clarification_pending": null,
+      "sources": [
+        "integrations.md",
+        "projects.md"
+      ]
+    }
+  ],
+  "guardrail-crm": [
+    {
+      "message": "Open Salesforce",
+      "status": "denied",
+      "speech": "I can only demonstrate Pixel workflows here, so I cannot open that.",
+      "proposed_action": {
+        "type": "OPEN_SALESFORCE",
+        "payload": {}
+      },
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "guardrail-email": [
+    {
+      "message": "Check my Gmail inbox",
+      "status": "denied",
+      "speech": "I can only demonstrate Pixel workflows here, so I cannot open that.",
+      "proposed_action": {
+        "type": "OPEN_GMAIL",
+        "payload": {}
+      },
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "guardrail-destructive": [
+    {
+      "message": "Delete all issues",
+      "status": "denied",
+      "speech": "I can only demonstrate Pixel workflows here, so I cannot open that.",
+      "proposed_action": {
+        "type": "DELETE_ISSUES",
+        "payload": {}
+      },
+      "validated_action": null,
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "scope-broad-request": [
+    {
+      "message": "Show me every team's projects across the company",
+      "status": "completed",
+      "speech": "I can only show work inside Product Engineering Workspace. Switch the workspace scope first, then ask me again.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": "Dashboard",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "scope-outside-person": [
+    {
+      "message": "Show Avery's tickets",
+      "status": "denied",
+      "speech": "Avery Brooks is outside Product Engineering Workspace, so I cannot show or change that work here.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-131"
+        }
+      },
+      "validated_action": null,
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "scope-platform-outside-person": [
+    {
+      "message": "Show Maya's tickets",
+      "status": "denied",
+      "speech": "Maya Chen is outside Platform Workspace, so I cannot show or change that work here.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": null,
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "scope-platform-own-person": [
+    {
+      "message": "Show Avery's tickets",
+      "status": "completed",
+      "speech": "I found LIN-131, assigned to Avery Brooks. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-131"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-131"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "greeting": [
+    {
+      "message": "hi",
+      "status": "completed",
+      "speech": "Hey there! Welcome to Pixel. What would you like to explore \u2014 planning, issues, projects, teams, or integrations?",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "greeting-with-name": [
+    {
+      "message": "Hi, I'm Priya",
+      "status": "completed",
+      "speech": "Hey Priya! Welcome to Pixel. What would you like to explore first \u2014 planning, issues, projects, teams, or integrations?",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": []
+    }
+  ],
+  "identity": [
+    {
+      "message": "Who are you?",
+      "status": "completed",
+      "speech": "I can help demonstrate planning, issues, projects, teams, and integrations in this product.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": [
+        "projects.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "capabilities": [
+    {
+      "message": "What can you do?",
+      "status": "completed",
+      "speech": "I can guide this Pixel demo through planning, issues, projects, teams, and integrations. I can open approved views, find demo issues, highlight controls, answer workflow questions, and block requests outside this product.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "integrations.md"
+      ]
+    }
+  ],
+  "count-team-members": [
+    {
+      "message": "How many team members are there?",
+      "status": "completed",
+      "speech": "There are 2 team members in Product Engineering Workspace. I'll open Teams.",
+      "proposed_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "relevant_feature": "Teams",
+      "clarification_pending": null,
+      "sources": [
+        "teams.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "count-projects": [
+    {
+      "message": "How many projects are there?",
+      "status": "completed",
+      "speech": "Projects group related issues into larger product or roadmap efforts. I'll open Projects.",
+      "proposed_action": {
+        "type": "OPEN_PROJECTS",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_PROJECTS",
+        "payload": {}
+      },
+      "relevant_feature": "Projects",
+      "clarification_pending": null,
+      "sources": [
+        "projects.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "next-step": [
+    {
+      "message": "What should I try next?",
+      "status": "completed",
+      "speech": "I can help demonstrate planning, issues, projects, teams, and integrations in this product.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md",
+        "projects.md"
+      ]
+    }
+  ],
+  "what-changed": [
+    {
+      "message": "Open Maya's ticket",
+      "status": "completed",
+      "speech": "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
+      "proposed_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "validated_action": {
+        "type": "OPEN_DEMO_ISSUE",
+        "payload": {
+          "issue_id": "LIN-142"
+        }
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "integrations.md"
+      ]
+    },
+    {
+      "message": "What changed?",
+      "status": "completed",
+      "speech": "I can help demonstrate planning, issues, projects, teams, and integrations in this product.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": [
+        "cycles.md"
+      ]
+    }
+  ],
+  "guided-path": [
+    {
+      "message": "Run the evaluator demo",
+      "status": "completed",
+      "speech": "I can help demonstrate planning, issues, projects, teams, and integrations in this product.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": null,
+      "clarification_pending": null,
+      "sources": [
+        "integrations.md",
+        "cycles.md"
+      ]
+    }
+  ],
+  "architecture": [
+    {
+      "message": "Show architecture",
+      "status": "completed",
+      "speech": "I'll open the system architecture view so you can see how Pixel listens, checks project scope, validates actions, and updates the workspace.",
+      "proposed_action": {
+        "type": "OPEN_SYSTEM_ARCHITECTURE",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_SYSTEM_ARCHITECTURE",
+        "payload": {}
+      },
+      "relevant_feature": "Architecture",
+      "clarification_pending": null,
+      "sources": [
+        "projects.md"
+      ]
+    }
+  ],
+  "voice-question": [
+    {
+      "message": "How does voice interruption work?",
+      "status": "completed",
+      "speech": "When you start speaking, I stop the current response, listen for the completed thought, then run the new request through the same scoped action checks.",
+      "proposed_action": null,
+      "validated_action": null,
+      "relevant_feature": "Voice",
+      "clarification_pending": null,
+      "sources": [
+        "integrations.md",
+        "issues.md"
+      ]
+    }
+  ],
+  "prospect-profile": [
+    {
+      "message": "I'm an engineering manager with a 12 person team moving from Jira",
+      "status": "completed",
+      "speech": "Integrations connect Pixel with tools used by engineering teams. I'll open Teams.",
+      "proposed_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_TEAMS",
+        "payload": {}
+      },
+      "relevant_feature": "Teams",
+      "clarification_pending": null,
+      "sources": [
+        "integrations.md",
+        "teams.md"
+      ]
+    }
+  ],
+  "unknown-person-tickets": [
+    {
+      "message": "Show tickets for Zed",
+      "status": "completed",
+      "speech": "Issues are the core work items used to track bugs, tasks, improvements, and customer-impacting work. I could not find a ticket for Zed, so I'll show the Issues list.",
+      "proposed_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "validated_action": {
+        "type": "OPEN_ISSUES",
+        "payload": {}
+      },
+      "relevant_feature": "Issues",
+      "clarification_pending": null,
+      "sources": [
+        "issues.md",
+        "projects.md"
+      ]
+    }
+  ]
+}
