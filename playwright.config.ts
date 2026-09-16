@@ -11,7 +11,10 @@ export default defineConfig({
     timeout: 10_000
   },
   fullyParallel: false,
-  reporter: [["list"], ["html", { open: "never" }]],
+  // In CI, the github reporter turns each failure into a public annotation on the run.
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never" }]]
+    : [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: webBaseUrl,
     trace: "on-first-retry"
