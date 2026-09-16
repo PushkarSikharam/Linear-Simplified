@@ -15,6 +15,9 @@ const SPEECH_WORST_CASE = Number(process.env.MEASURE_SPEECH_ATTEMPTS ?? 2);
 const ENABLE_VOICE = process.env.MEASURE_ENABLE_VOICE !== "false";
 const API_URL = process.env.MEASURE_API_URL || "";
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+// Longer than the API's 10-second per-provider timeout, times two fallback attempts.
+const SPEECH_WAIT_MS = 25_000;
+const SETTLE_WAIT_MS = 25_000;
 const PROMPTS = [
   "How does sprint planning work?",
   "Show me the current cycle",
@@ -65,6 +68,27 @@ class BrowserCeiling {
   }
 }
 
+type LedgerSummary = { rows: { status: string }[] };
+
+/**
+ * The server ledger once every dispatched attempt has settled. Attempts still open when
+ * the wait expires are reported as-is: they were dispatched, so they stay counted.
+ */
+async function settledServerSummary(): Promise<unknown> {
+  const deadline = Date.now() + SETTLE_WAIT_MS;
+  let summary = await serverSummary();
+  while (hasOpenAttempts(summary) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    summary = await serverSummary();
+  }
+  return summary;
+}
+
+function hasOpenAttempts(summary: unknown): boolean {
+  const rows = (summary as LedgerSummary | null)?.rows;
+  return Array.isArray(rows) && rows.some((row) => row.status === "reserved");
+}
+
 async function serverSummary(): Promise<unknown> {
   if (!API_URL) return "not available: the harness did not start the API";
   const login = await fetch(`${API_URL}/api/auth/demo-login`, {
@@ -104,10 +128,19 @@ test("provider usage for one page load and a five-turn conversation", async ({ p
     await voiceToggle.click();
   }
 
+  // A visitor listens to each reply before asking the next question. Sending the next
+  // prompt earlier would cancel speech mid-request and skew the measurement.
+  const speechAnswered = () => page.waitForResponse(
+    (response) => classify(new URL(response.url()).pathname) === "speech",
+    { timeout: SPEECH_WAIT_MS }
+  ).catch(() => null);
+
   let turnsCompleted = 0;
   for (const prompt of PROMPTS) {
     if (ceiling.exhausted) break;
+    const answered = ENABLE_VOICE ? speechAnswered() : Promise.resolve(null);
     await sendChat(page, prompt);
+    await answered;
     await page.waitForLoadState("networkidle");
     turnsCompleted += 1;
   }
@@ -125,7 +158,7 @@ test("provider usage for one page load and a five-turn conversation", async ({ p
     reservedWorstCaseAttempts: ceiling.reserved,
     blockedRequests: ceiling.blocked,
     externalHostsBlocked: ceiling.external,
-    serverLedger: await serverSummary()
+    serverLedger: await settledServerSummary()
   };
 
   const outputDir = join("test-results", "measurements");

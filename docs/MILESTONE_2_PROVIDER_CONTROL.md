@@ -1,7 +1,9 @@
 # Milestone 2: Provider Control, Accounting and CI
 
-Status date: 2026-09-16. Milestone 2 is **not signed off**. Its remaining blockers need a
-green GitHub pull-request run and an authorized paid measurement.
+Status date: 2026-09-16. Milestone 2 is **not signed off**.
+- CI is green on GitHub (run 35126923767, commit `73cd03d`).
+- Paid before/after measurement: formally waived (see Measurement decision).
+- Still needed: a green pull-request workflow run.
 
 ## What is enforced
 
@@ -70,17 +72,18 @@ green GitHub pull-request run and an authorized paid measurement.
 | 4 | Legacy in-memory counter removed | Done |
 | 5 | Unrequested speech and prewarming removed | Done |
 | 6 | Realtime blocked | Done |
-| 7 | CI added | Done (workflow committed) |
-| 8 | Fake-provider CI guard | Done locally. Needs its first GitHub run. |
-| 9 | Concurrency, restart, reset and accounting-failure tests | Passing locally. Needs its first GitHub run. |
-| 10 | Before/after measurement | **Open.** Dry run done; paid runs not authorized. |
-| 11 | Green GitHub pull-request workflow | **Open.** Needs a push and a pull request. |
+| 7 | CI added | Done |
+| 8 | Fake-provider CI guard | Done. Passed on GitHub Actions run 35126923767 (commit `73cd03d`). |
+| 9 | Concurrency, restart, reset and accounting-failure tests | Done. Passed on GitHub Actions run 35126923767. |
+| 10 | Before/after measurement | **Waived** for development because the project has no budget for provider spend. Dry-run and fake-provider evidence is accepted for Milestone 2. One partial paid run happened before the waiver (see Measurement decision). Production cost benchmarking is future work before commercial launch. |
+| 11 | Green GitHub pull-request workflow | **Open. The only remaining blocker.** Green on a push to `main` (run 35126923767: all three jobs passed), but a pull-request run is required and has not happened yet. |
 
 ## Local verification
 
 | Check | Result |
 | --- | --- |
-| API suite | 142 passed; the 3 CI-only guard tests skip locally and pass with CI settings |
+| API suite | 146 passed; the 3 CI-only guard tests skip locally and pass with CI settings |
+| Linux rehearsal (Python 3.14 + Node 24 container, CI environment, no developer env files) | API 146 passed (guard tests included); type check, 21 unit tests and production build passed; 51 browser tests passed |
 | Web type check | Passed |
 | Web unit tests | 21 passed |
 | Production build (isolated build folder) | Passed |
@@ -110,21 +113,54 @@ The number 13 is the browser-side ceiling's **worst-case charge**. It is not a c
   - Actual provider attempts dispatched: **0**.
 - **In a paid run**, the charge stays an upper bound. The authoritative figures are the server ledger's rows; the report includes them under `serverLedger`.
 
-## Measurement procedure
+### First GitHub run (commit `531e460`, push to `main`)
+
+- **API tests and Web checks:** passed on Linux.
+- **Browser tests:** failed in one test, `milestone 2 speech is only requested after the visitor turns voice on`.
+  - **Symptom:** the test expected 429 `providers_disabled` and received 503 `no_provider_available`.
+  - **Cause:** CI has no provider keys, so the speech service found no providers before it checked the kill switch. Locally the test passed only because the e2e API read developer `.env` files.
+  - **Fixes:**
+    - The kill switch is now checked first.
+    - A new setting, `PIXEL_IGNORE_ENV_FILES=true`, stops the API from reading developer `.env` files. The e2e API and CI both set it, so local runs behave like CI.
+    - Regression tests cover both fixes.
+  - **Readable failures:** in CI, Playwright also reports failures as public GitHub annotations.
+  - **Action versions:** workflow actions were updated to their Node 24 releases.
+- **Verification:** the Linux rehearsal above reproduced the failure before the fix and passes after it.
+
+## Measurement decision
+
+**The paid before/after measurement is waived for Milestone 2.** The project currently has no budget for provider spend. Milestone 2 has to answer two separate questions:
+- *Can we prove provider-control safety?* Yes, with fake providers, dry runs and CI.
+- *Can we prove real-world provider cost?* Not yet; that needs paid traffic.
+
+The second question isn't needed to prove the architecture, so production cost benchmarking remains future work before commercial launch.
+
+The dry run above proves that page load makes no provider requests, that speech is refused before dispatch when providers are off, and that both the browser and server ceilings hold. **It does not measure real provider cost.**
+
+### Paid run made before the waiver
+
+The stakeholder briefly authorized a bounded paid measurement (20-attempt ceiling), then withdrew that authorization. One "after" run on this code completed before the withdrawal; the "before" run was never started.
+
+| Item | Result |
+| --- | --- |
+| Configured providers | Azure Speech (`en-US-Ava:DragonHDLatestNeural`) and Gemini; no OpenAI |
+| Page load | 0 provider requests |
+| Conversation | 5 turns; 5 speech requests and 3 turn requests reached the API; browser worst-case charge 13 of 20 |
+| Server ledger (final) | 5 Azure speech attempts, 738 characters reserved, all still `reserved` |
+| Reasoning | No Gemini attempts: none of the 3 turns needed the model |
+| Provider-reported usage | None: the outcomes were never recorded |
+
+- **Why the Azure attempts never settled:** the harness sent each prompt before the previous reply's audio returned, and stopped the API about a second after the last turn, while all five Azure requests were still in flight.
+- **Cost treatment:** by design, these five attempts stay counted as spent. The worst-case exposure is therefore 738 characters of Azure neural speech, at the HD voice's per-character price. That is an estimate, not a billed figure. It has not been reconciled against the Azure bill.
+- **Harness fix (made after this run):** the harness now waits for each spoken reply before the next prompt, and waits up to 25 seconds for the ledger to settle before taking its snapshot. The fix was verified with a dry run only.
+
+## Measurement procedure (for a future funded benchmark)
 
 `npm run measure:usage` covers one page load plus five conversation turns, with voice turned on for replies.
 - **Ceiling:** a browser-side safeguard charges each request its worst-case attempts before forwarding it, and blocks realtime entirely. When the harness starts the API itself, `PIXEL_TOTAL_ATTEMPT_CAP` enforces the same ceiling on the server.
 - **Report:** written to `test-results/measurements/`.
-
-**Paid runs require explicit authorization.** Only then set `MEASURE_PAID=true`, in a shell that has the provider keys.
-
-- **After (this code):** `MEASURE_PAID=true npm run measure:usage`
-- **Before (commit `c3a6f41`):**
-  1. Check out that commit separately and start its API and web app.
-  2. From this checkout, run with `MEASURE_BASE_URL=<its web URL>` and `MEASURE_SPEECH_ATTEMPTS=3`. The old build tried up to three providers per request.
-
-  That build has no server ledger, so only the browser-side safeguard applies; run it with a fresh browser profile and no other clients. An incomplete run that stops at the ceiling is acceptable; exceeding the ceiling is not.
-
+- **Guardrail:** do not set `MEASURE_PAID=true` without an explicit, budgeted authorization.
+- **Before-run (commit `c3a6f41`):** run that commit separately, then use `MEASURE_BASE_URL=<its web URL>` with `MEASURE_SPEECH_ATTEMPTS` equal to the number of configured speech providers. That build has no server ledger, so only the browser-side safeguard applies.
 ## Local development changes
 
 - The API needs `PIXEL_SYNTHETIC_DEMO=true` before the demo can sign in.
@@ -142,7 +178,7 @@ The number 13 is the browser-side ceiling's **worst-case charge**. It is not a c
 
 ## Milestone 3 boundary
 
-**Start condition:** Milestone 3 starts only after this milestone has green pull-request CI evidence and a resolved measurement decision.
+**Start condition:** Milestone 3 starts only after this milestone has green pull-request CI evidence. The measurement decision is resolved: waived.
 
 **Goal:** convert the Linear-specific core into a product-configurable architecture, without weakening Milestone 2's tenant boundaries. The work covers:
 - `ProductProfile`
