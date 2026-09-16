@@ -180,12 +180,13 @@ an exact regression test in `apps/api/tests/test_isolation_hardening.py`.
 | Web unit tests | 23 passed | 23 passed |
 | Production build | — | Passed |
 | Browser suites (core + Linear golden) | 107 passed | 107 passed |
-| Pull-request CI | Pending | |
+| Pull-request CI | [PR #2](https://github.com/PushkarSikharam/Linear-Simplified/pull/2), run [35148908699](https://github.com/PushkarSikharam/Linear-Simplified/actions/runs/35148908699) on `e4b430e`: API tests, web checks and browser tests passed | |
+| Merged to `main` | `3d80deb`; push run [35149758715](https://github.com/PushkarSikharam/Linear-Simplified/actions/runs/35149758715) passed | |
 
 Exit criteria for signing off 3.1 again:
 - the reproductions fail before the fixes and pass after them (done);
 - existing suites stay green (done);
-- green pull-request CI;
+- green pull-request CI (done: PR #2);
 - a review of the final diff.
 
 ## Sizing for 3.2–3.8
