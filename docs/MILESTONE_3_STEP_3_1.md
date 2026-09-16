@@ -1,6 +1,6 @@
 # Milestone 3, Step 3.1: Product Definition Contract, Loader and SaaS Tenancy Model
 
-Status: **committed to `main` as `3221971`; CI green on push. Awaiting a green pull-request run as review evidence, then stakeholder sign-off.**
+Status: **signed off by the stakeholder on 2026-09-16.** Committed to `main` as `3221971`; CI green on push. The pull-request CI requirement was waived at sign-off (see GitHub CI below).
 Date: 2026-09-16. Design reference: `docs/MILESTONE_3_PRODUCT_PROFILE_DESIGN.md` (revision 4, section 3A).
 
 ## Scope delivered
@@ -103,9 +103,11 @@ No paid provider was called: every run used `PIXEL_PAID_PROVIDERS_ENABLED=false`
 | [35144291014](https://github.com/PushkarSikharam/Linear-Simplified/actions/runs/35144291014) | push of `3221971` to `main` | Passed | Passed | Passed |
 
 Process note: the 3.1 implementation was pushed to `main` directly instead of through a
-branch and pull request. The push run above verifies the code. The pull request that
-carries this record is the review evidence the sign-off requires, and its CI run is
-recorded there.
+branch and pull request. The push run above verifies the exact committed code.
+
+**Sign-off decision (2026-09-16):** the stakeholder signed off 3.1 on the green push run and
+explicitly waived the pull-request CI run for this step. This is a one-time exception.
+Later steps still go through branch → pull request → green CI before sign-off.
 
 ## Findings that shape the next steps
 
