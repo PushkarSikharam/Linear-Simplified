@@ -110,6 +110,19 @@ class SpeechServiceTest(LedgerFixture):
                          (429, "providers_disabled"))
         self.assertEqual(azure.calls, [])
 
+    def test_kill_switch_is_reported_even_without_configured_providers(self):
+        os.environ["PIXEL_PAID_PROVIDERS_ENABLED"] = "false"
+        with self.assertRaises(SpeechUnavailable) as unavailable:
+            self.synthesize(self.service())
+        self.assertEqual((unavailable.exception.status_code, unavailable.exception.reason),
+                         (429, "providers_disabled"))
+
+    def test_no_configured_provider_is_reported(self):
+        with self.assertRaises(SpeechUnavailable) as unavailable:
+            self.synthesize(self.service())
+        self.assertEqual((unavailable.exception.status_code, unavailable.exception.reason),
+                         (503, "no_provider_available"))
+
     def test_accounting_outage_refuses_before_any_dispatch(self):
         azure = FakeProvider("azure", [audio("azure-speech")])
 

@@ -32,6 +32,10 @@ def env_value(name: str) -> str | None:
     if value:
         return value
 
+    # Hermetic runs (tests, CI) must not pick up a developer's local files or keys.
+    if _clean(os.getenv("PIXEL_IGNORE_ENV_FILES")) in {"1", "true", "yes", "on"}:
+        return None
+
     for env_file in _env_files():
         value = _clean(env_file.get(name))
         if value:

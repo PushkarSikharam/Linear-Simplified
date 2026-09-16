@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from uuid import uuid4
 
+from app.services.provider_policy import paid_providers_enabled
 from app.services.speech_providers import (
     SpeechProvider,
     SpeechProviderError,
@@ -56,6 +57,9 @@ class SpeechService:
         session_id: str | None,
         text: str,
     ) -> SynthesizedSpeech:
+        # The kill switch is reported first, whatever providers happen to be configured.
+        if not paid_providers_enabled(tenant):
+            raise SpeechUnavailable(429, "providers_disabled")
         providers = [provider for provider in self._providers(tenant) if not self._cooling_down(tenant, provider)]
         if not providers:
             raise SpeechUnavailable(503, "no_provider_available")

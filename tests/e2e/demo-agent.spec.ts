@@ -67,6 +67,8 @@ test.beforeAll(async () => {
         // Paid providers are refused before dispatch, and any outbound call fails loudly.
         PIXEL_PAID_PROVIDERS_ENABLED: "false",
         PIXEL_BLOCK_EXTERNAL_HTTP: "true",
+        // Behave identically on developer machines and CI: no local .env files or keys.
+        PIXEL_IGNORE_ENV_FILES: "true",
         LLM_ENABLED: "false"
       },
       stdio: "ignore",
