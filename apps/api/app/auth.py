@@ -10,13 +10,13 @@ Tokens are signed with itsdangerous and must also match an active login row. In 
 member login would come from an OIDC provider; the passwordless demo login exists only for
 isolated synthetic demos.
 
-`scope_ids` and `is_admin` are record-level grants inside the demo product's data (its own
-workspaces). They are product data permissions, not Pixel organization roles.
+Record grants (workspace scopes and record administration inside a product's data) are not
+part of the principal. They are resolved per organization and product for each request; see
+`app/record_access.py`.
 """
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import secrets
 import time
@@ -27,8 +27,9 @@ from fastapi import Depends, Header, HTTPException
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app.db import get_connection
-from app.definitions.access import authorize_product
+from app.definitions.access import AccessDenied, authorize_product
 from app.definitions.organizations import OrganizationDirectory
+from app.record_access import RecordGrant, legacy_record_owner, record_grant
 from app.services.env import env_bool, env_value
 
 # The secret rotates per process; tokens don't survive a server restart,
@@ -36,14 +37,6 @@ from app.services.env import env_bool, env_value
 _SECRET = env_value("PIXEL_AUTH_SECRET") or os.urandom(32).hex()
 _SERIALIZER = URLSafeTimedSerializer(_SECRET)
 _TOKEN_MAX_AGE_SECONDS = int(os.environ.get("PIXEL_TOKEN_MAX_AGE", "86400"))
-
-# Demo users and their record grants inside the demo product. Their organization memberships
-# come from product seed packages.
-DEMO_USERS: tuple[dict, ...] = (
-    {"user_id": "demo-product-eng", "scope_ids": ["workspace-product-eng"], "is_admin": False},
-    {"user_id": "demo-platform", "scope_ids": ["workspace-platform"], "is_admin": False},
-    {"user_id": "demo-admin", "scope_ids": ["workspace-product-eng", "workspace-platform"], "is_admin": True},
-)
 
 
 @dataclass(frozen=True)
@@ -54,24 +47,12 @@ class AuthUser:
     role: str | None = None
     team_id: str | None = None
     product_id: str | None = None
-    scope_ids: frozenset[str] = frozenset()
-    is_admin: bool = False
 
 
 def demo_login_enabled() -> bool:
     """Passwordless demo login, including the admin identity, is only for deployments
     explicitly marked as isolated synthetic demos. It is never customer access."""
     return env_bool("PIXEL_SYNTHETIC_DEMO", default=False)
-
-
-def seed_demo_users() -> None:
-    """Insert demo users' record grants if they don't already exist."""
-    with get_connection() as connection:
-        for user in DEMO_USERS:
-            connection.execute(
-                "insert or ignore into access_grants(user_id, scope_ids, is_admin) values (?, ?, ?)",
-                (user["user_id"], json.dumps(sorted(user["scope_ids"])), 1 if user["is_admin"] else 0),
-            )
 
 
 def create_token(user_id: str, tenant_id: str | None = None) -> str:
@@ -91,7 +72,7 @@ def create_token(user_id: str, tenant_id: str | None = None) -> str:
     # The nonce keeps two logins in the same second from producing identical tokens.
     token = _SERIALIZER.dumps({"k": "member", "uid": user_id, "tid": tenant_id, "n": secrets.token_hex(8)})
     with get_connection() as connection:
-        # login_sessions references access_grants; members without record grants get an empty one.
+        # login_sessions references the legacy access_grants table, which grants nothing any more.
         connection.execute(
             "insert or ignore into access_grants(user_id, scope_ids, is_admin) values (?, '[]', 0)",
             (user_id,),
@@ -160,31 +141,49 @@ def require_org_admin(user: AuthUser) -> None:
         raise HTTPException(status_code=403, detail="This operation requires an organization administrator.")
 
 
-def visible_scope_ids(user: AuthUser) -> frozenset[str] | None:
-    """Record scopes the user may see inside the demo product; None means every scope."""
-    return None if user.is_admin else user.scope_ids
+def require_record_access(user: AuthUser = Depends(require_member)) -> RecordGrant:
+    """FastAPI dependency for the legacy record endpoints.
+
+    The caller must belong to the organization of the designated record-owning product, be
+    allowed to use that product (active organization, team and binding), and hold a record
+    grant for it. Anything else gets the same 403.
+    """
+    owner = legacy_record_owner()
+    if owner is None or owner.tenant_id != user.tenant_id:
+        raise _no_record_access()
+    return product_record_grant(user, owner.product_id)
 
 
-def require_any_scope(scope_ids: set[str], user: AuthUser) -> None:
-    """Raise 403 unless the user can access at least one of the record's scopes."""
-    if user.is_admin:
-        return
-    if not scope_ids & user.scope_ids:
+def product_record_grant(user: AuthUser, product_id: str) -> RecordGrant:
+    """The caller's record grant for one product of their organization, or 403."""
+    try:
+        authorize_product(user, product_id)
+    except AccessDenied:
+        raise _no_record_access()
+    grant = record_grant(user.tenant_id, product_id, user.user_id) if user.kind == "member" else None
+    if grant is None:
+        raise _no_record_access()
+    return grant
+
+
+def require_any_scope(scope_ids: set[str], grant: RecordGrant) -> None:
+    """Raise 403 unless the grant covers at least one of the record's scopes."""
+    if not grant.may_use_any(scope_ids):
         raise HTTPException(status_code=403, detail="You do not have access to this workspace.")
 
 
-def require_scope(scope_id: str, user: AuthUser) -> None:
-    """Raise 403 if the authenticated user does not have access to the scope."""
-    if user.is_admin:
-        return
-    if scope_id not in user.scope_ids:
+def require_scope(scope_id: str, grant: RecordGrant) -> None:
+    if not grant.may_use(scope_id):
         raise HTTPException(status_code=403, detail="You do not have access to this workspace.")
 
 
-def require_admin(user: AuthUser) -> None:
-    """Raise 403 unless the user administers the demo product's records."""
-    if not user.is_admin:
+def require_record_admin(grant: RecordGrant) -> None:
+    if not grant.is_admin:
         raise HTTPException(status_code=403, detail="This operation requires administrator access.")
+
+
+def _no_record_access() -> HTTPException:
+    return HTTPException(status_code=403, detail="You do not have access to these records.")
 
 
 def _decode(authorization: str | None) -> tuple[dict, str]:
@@ -213,9 +212,6 @@ def _member_from(payload: dict, token: str) -> AuthUser:
             "select 1 from login_sessions where token_hash = ? and customer_id = ? and expires_at > ?",
             (_hash(token), tenant_id, time.time()),
         ).fetchone()
-        grant = connection.execute(
-            "select scope_ids, is_admin from access_grants where user_id = ?", (user_id,)
-        ).fetchone()
     if active is None:
         raise HTTPException(status_code=401, detail="Token is not active.")
     membership = OrganizationDirectory().membership(tenant_id, user_id)
@@ -227,8 +223,6 @@ def _member_from(payload: dict, token: str) -> AuthUser:
         tenant_id=tenant_id,
         role=membership.role,
         team_id=membership.team_id,
-        scope_ids=frozenset(json.loads(grant["scope_ids"])) if grant else frozenset(),
-        is_admin=bool(grant["is_admin"]) if grant else False,
     )
 
 

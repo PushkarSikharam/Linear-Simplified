@@ -12,16 +12,19 @@ from app.auth import (
     create_token,
     create_visitor_token,
     demo_login_enabled,
-    require_admin,
+    product_record_grant,
     require_any_scope,
     require_auth,
     require_member,
     require_org_admin,
+    require_record_access,
+    require_record_admin,
     require_scope,
-    visible_scope_ids,
 )
-from app.definitions.access import AccessDenied, authorize_product
+from app.definitions.access import AccessDenied, ProductAccess, authorize_product
+from app.definitions.sessions import DefinitionUnavailable, SessionEnded, check_pinned_session, pin_new_session
 from app.db import migrate
+from app.record_access import RecordGrant
 from app.schemas import CancelTurnRequest, CancelTurnResponse, TurnRequest, TurnResponse
 from app.record_schemas import CycleInput, IssueInput, MemberInput, ProjectInput
 from app.services.agent import DemoAgent
@@ -138,62 +141,65 @@ def start_visitor_session(tenant_id: str, product_id: str) -> VisitorSessionResp
 # --- Authenticated endpoints ---
 
 
+# Legacy record endpoints serve only the designated record-owning product (until step 3.5).
+
+
 @app.get("/api/demo-data")
-def get_demo_data(user: AuthUser = Depends(require_member)) -> dict[str, list[dict]]:
-    return product_data.load(visible_scope_ids(user))
+def get_demo_data(grant: RecordGrant = Depends(require_record_access)) -> dict[str, list[dict]]:
+    return product_data.load(grant.visible_scope_ids())
 
 
 @app.post("/api/demo-data/reset")
-def reset_demo_data(user: AuthUser = Depends(require_member)) -> dict[str, list[dict]]:
-    require_admin(user)
+def reset_demo_data(grant: RecordGrant = Depends(require_record_access)) -> dict[str, list[dict]]:
+    require_record_admin(grant)
     return product_data.reset()
 
 
 @app.post("/api/demo-data/issues")
 def create_demo_issue(issue: IssueInput,
-                      user: AuthUser = Depends(require_member),
+                      grant: RecordGrant = Depends(require_record_access),
                       idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
-    require_any_scope(product_data.scopes_for_record(issue.projectId, issue.project), user)
+    require_any_scope(product_data.scopes_for_record(issue.projectId, issue.project), grant)
     return product_data.save_issue(issue.model_dump(mode="json"), idempotency_key)
 
 
 @app.put("/api/demo-data/issues/{issue_id}")
 def update_demo_issue(issue_id: str, issue: IssueInput,
-                      user: AuthUser = Depends(require_member)) -> dict:
+                      grant: RecordGrant = Depends(require_record_access)) -> dict:
     existing = product_data.get_issue(issue_id)
     if existing is None:
         raise RecordNotFound("This ticket no longer exists.")
     # The user must be able to see the ticket now and wherever the edit moves it.
-    require_any_scope(product_data.scopes_for_record(existing["projectId"], existing["project"]), user)
-    require_any_scope(product_data.scopes_for_record(issue.projectId, issue.project), user)
+    require_any_scope(product_data.scopes_for_record(existing["projectId"], existing["project"]), grant)
+    require_any_scope(product_data.scopes_for_record(issue.projectId, issue.project), grant)
     return product_data.update_issue(issue_id, issue.model_dump(mode="json"))
 
 
 @app.post("/api/demo-data/projects")
 def create_demo_project(project: ProjectInput, workspace_scope_id: str,
-                        user: AuthUser = Depends(require_member),
+                        grant: RecordGrant = Depends(require_record_access),
                         idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
-    require_scope(workspace_scope_id, user)
+    require_scope(workspace_scope_id, grant)
     return product_data.save_project(project.model_dump(mode="json"), workspace_scope_id, idempotency_key)
 
 
 @app.post("/api/demo-data/cycles")
 def create_demo_cycle(cycle: CycleInput,
-                      user: AuthUser = Depends(require_member),
+                      grant: RecordGrant = Depends(require_record_access),
                       idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
-    # Cycles without a project are workspace-wide and reserved for administrators.
+    # Cycles without a project are workspace-wide and reserved for record administrators.
     if cycle.projectId is None:
-        require_admin(user)
+        require_record_admin(grant)
     else:
-        require_any_scope(product_data.scopes_for_record(cycle.projectId), user)
+        require_any_scope(product_data.scopes_for_record(cycle.projectId), grant)
     return product_data.save_cycle(cycle.model_dump(mode="json"), idempotency_key)
 
 
 @app.post("/api/demo-data/team-members")
 def create_demo_team_member(member: MemberInput, workspace_scope_id: str,
-                            user: AuthUser = Depends(require_member),
+                            grant: RecordGrant = Depends(require_record_access),
                             idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
-    require_scope(workspace_scope_id, user)
+    require_scope(workspace_scope_id, grant)
     return product_data.save_team_member(member.model_dump(mode="json"), workspace_scope_id, idempotency_key)
 
 
@@ -218,27 +224,18 @@ class SpeechRequest(BaseModel):
 
 @app.post("/api/speech", response_class=Response)
 def synthesize_speech(body: SpeechRequest, user: AuthUser = Depends(require_auth)) -> Response:
+    """Every check runs before any budget is reserved or any provider is contacted."""
     try:
         access = authorize_product(user, body.product_id, agent.directory)
     except AccessDenied:
         raise HTTPException(status_code=404, detail="This product is not available.")
-    # A session is attributed only when it belongs to the caller and to this product.
-    session_id = body.session_id
-    if session_id:
-        pin = agent.sessions.pin_for(session_id)
-        if (
-            pin is None
-            or pin.product_id != body.product_id
-            or not agent.sessions.owns_session(session_id, user.user_id, user.tenant_id)
-        ):
-            session_id = None
-    voice_style = PRODUCTS_BY_ID[access.binding.definition_id].voice_style
     try:
+        definition_id = _speech_definition(user, access, body.session_id)
         speech = speech_service.synthesize(
             tenant=access.context,
-            voice_style=voice_style,
+            voice_style=PRODUCTS_BY_ID[definition_id].voice_style,
             user_id=user.user_id,
-            session_id=session_id,
+            session_id=body.session_id,
             text=body.text,
         )
     except SpeechUnavailable as unavailable:
@@ -250,6 +247,30 @@ def synthesize_speech(body: SpeechRequest, user: AuthUser = Depends(require_auth
     if speech.voice:
         headers["X-TTS-Voice"] = speech.voice
     return Response(content=speech.audio, media_type=speech.media_type, headers=headers)
+
+
+def _speech_definition(user: AuthUser, access: ProductAccess, session_id: str | None) -> str:
+    """The definition speech runs on, after the same lifecycle checks a chat turn applies.
+
+    With a session, it must belong to the caller and to this product, and still be valid on its
+    pinned definition: a retired version still serves its sessions, a revoked one does not.
+    Without a session, the current definition of the product must be startable. A supplied
+    session is never silently ignored.
+    """
+    if session_id is None:
+        try:
+            return pin_new_session(access, agent.directory.definitions).definition_id
+        except DefinitionUnavailable as unavailable:
+            raise SpeechUnavailable(409, unavailable.reason) from unavailable
+    pin = agent.sessions.pin_for(session_id)
+    if not agent.sessions.owns_session(session_id, user.user_id, user.tenant_id) or (
+        pin is not None and pin.product_id != access.binding.product_id
+    ):
+        raise HTTPException(status_code=404, detail="This conversation was not found.")
+    try:
+        return check_pinned_session(pin, agent.directory).definition_id
+    except SessionEnded as ended:
+        raise SpeechUnavailable(409, ended.reason) from ended
 
 
 @app.get("/api/usage/summary")
@@ -266,7 +287,12 @@ def usage_summary(day: str | None = None, user: AuthUser = Depends(require_membe
 @app.post("/api/turn", response_model=TurnResponse)
 def create_turn(request: TurnRequest,
                 user: AuthUser = Depends(require_auth)) -> TurnResponse:
-    require_scope(request.workspace_scope_id, user)
+    try:
+        authorize_product(user, request.product_id, agent.directory)
+    except AccessDenied:
+        # The agent answers with the same denial every unusable product gets.
+        return agent.handle_turn(request, user)
+    require_scope(request.workspace_scope_id, product_record_grant(user, request.product_id))
     return agent.handle_turn(request, user)
 
 

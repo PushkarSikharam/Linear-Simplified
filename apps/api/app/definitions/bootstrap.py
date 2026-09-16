@@ -15,6 +15,7 @@ from app.definitions.contract import Slug, Strict
 from app.definitions.loader import DefinitionSource
 from app.definitions.organizations import OrganizationDirectory
 from app.definitions.registry import DefinitionRegistry
+from app.record_access import designate_legacy_owner, grant_records
 from app.services.env import env_bool
 
 
@@ -28,10 +29,17 @@ class _SeedTeam(Strict):
     name: str
 
 
+class _SeedRecordGrant(Strict):
+    scope_ids: list[str] = []
+    admin: bool = False
+
+
 class _SeedMember(Strict):
     user_id: str
     role: str
     team: bool = False
+    # Transitional: a grant on the seeded product's legacy records (until step 3.5).
+    records: _SeedRecordGrant | None = None
 
 
 class _SeedProduct(Strict):
@@ -39,6 +47,8 @@ class _SeedProduct(Strict):
     definition_version: int = Field(ge=1)
     knowledge_version: int = Field(default=1, ge=1)
     visitor_access: bool = False
+    # Transitional: this product owns the legacy record tables (until step 3.5).
+    legacy_records: bool = False
 
 
 class DemoOrganizationSeed(Strict):
@@ -80,3 +90,9 @@ def _apply(directory: OrganizationDirectory, definition_id: str, seed: DemoOrgan
             knowledge_version=seed.product.knowledge_version,
             visitor_access=seed.product.visitor_access,
         )
+    product_id = seed.product.product_id
+    if seed.product.legacy_records:
+        designate_legacy_owner(tenant_id, product_id)
+    for member in seed.members:
+        if member.records is not None:
+            grant_records(tenant_id, product_id, member.user_id, member.records.scope_ids, member.records.admin)

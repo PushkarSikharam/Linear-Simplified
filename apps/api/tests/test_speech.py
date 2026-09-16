@@ -294,7 +294,7 @@ class SpeechEndpointTest(LedgerFixture):
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.json()["reason"], "providers_disabled")
 
-    def test_only_the_callers_own_session_is_attributed(self):
+    def test_only_the_callers_own_session_is_accepted(self):
         sessions, directory = SessionManager(), self.add_other_product()
         for session_id, user_id, product_id in (
             ("mine", "demo-product-eng", "linear-demo"),
@@ -303,10 +303,12 @@ class SpeechEndpointTest(LedgerFixture):
         ):
             pin = pin_new_session(authorize_product(ORG_ADMIN, product_id, directory))
             sessions.ensure_session(session_id, product_id, user_id=user_id, tenant_id="pixel-dev", pin=pin)
-        self.azure.outcomes.extend([audio("azure-speech"), audio("azure-speech")])
-        for session_id in ("mine", "theirs", "mine-elsewhere"):
-            self.post({"text": "Hello", "session_id": session_id})
-        self.assertEqual([row["session_id"] for row in self.rows()], ["mine", None, None])
+        statuses = [self.post({"text": "Hello", "session_id": session_id}).status_code
+                    for session_id in ("mine", "theirs", "mine-elsewhere")]
+        # Invalid sessions are rejected, never silently treated as sessionless.
+        self.assertEqual(statuses, [200, 404, 404])
+        self.assertEqual([row["session_id"] for row in self.rows()], ["mine"])
+        self.assertEqual(self.azure.calls, ["Hello"])
 
     def test_spoken_text_never_reaches_the_logs(self):
         with self.assertLogs("pixel.usage", level="INFO") as logs:

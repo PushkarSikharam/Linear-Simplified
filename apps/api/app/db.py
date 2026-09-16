@@ -86,8 +86,18 @@ def migrate() -> None:
               check ((role = 'org_admin') = (team_id is null))
             );
 
+            -- A definition's identity. Its ownership is fixed when the first version is registered
+            -- and every later version must match it, whatever order versions arrive in.
+            create table if not exists definitions(
+              definition_id text primary key,
+              ownership text not null check (ownership in ('platform_shared', 'organization_private')),
+              owner_tenant_id text,
+              created_at text not null,
+              check ((ownership = 'organization_private') = (owner_tenant_id is not null))
+            );
+
             -- Definition versions may be bound by many products, so their lifecycle is global.
-            -- Ownership is copied from the immutable definition file.
+            -- Ownership is copied from the immutable definition file and must match the identity.
             create table if not exists definition_versions(
               definition_id text not null,
               version integer not null,
@@ -132,6 +142,25 @@ def migrate() -> None:
               tenant_id text not null,
               product_id text not null,
               expires_at real not null,
+              foreign key (tenant_id, product_id) references product_bindings(tenant_id, product_id)
+            );
+
+            -- Transitional until records migrate (Milestone 3, step 3.5): the legacy demo record
+            -- tables belong to exactly one designated product, and grants on them are scoped to
+            -- that organization and product.
+            create table if not exists legacy_record_owner(
+              singleton integer primary key check (singleton = 1),
+              tenant_id text not null,
+              product_id text not null,
+              foreign key (tenant_id, product_id) references product_bindings(tenant_id, product_id)
+            );
+            create table if not exists record_grants(
+              tenant_id text not null,
+              product_id text not null,
+              user_id text not null,
+              scope_ids text not null,
+              is_admin integer not null default 0,
+              primary key (tenant_id, product_id, user_id),
               foreign key (tenant_id, product_id) references product_bindings(tenant_id, product_id)
             );
 
@@ -289,15 +318,19 @@ def migrate() -> None:
         usage_columns = {row["name"] for row in connection.execute("pragma table_info(provider_attempts)")}
         if "team_id" not in usage_columns:
             connection.execute("alter table provider_attempts add column team_id text")
+        # Definitions registered before identities existed take the ownership of their first version.
+        connection.execute(
+            """
+            insert or ignore into definitions(definition_id, ownership, owner_tenant_id, created_at)
+            select definition_id, ownership, owner_tenant_id, registered_at
+            from definition_versions order by registered_at, version
+            """
+        )
 
     _add_project_foreign_keys()
 
     from app.services.usage_ledger import UsageLedger
     UsageLedger().prune_expired()
-
-    # Seed demo auth users after schema is ready.
-    from app.auth import seed_demo_users
-    seed_demo_users()
 
     from app.definitions.bootstrap import load_demo_seeds
     load_demo_seeds()
