@@ -1,7 +1,7 @@
 # Milestone 2: Provider Control, Accounting and CI
 
 Status date: 2026-09-16. Milestone 2 is **not signed off**.
-- CI is green on GitHub (run 35126923767, commit `73cd03d`).
+- CI is green on GitHub for pushes to `main`: run 35126923767 (commit `73cd03d`, the CI fix) and run 35128102003 (commit `4a1fd69`, this evidence plus the harness fix).
 - Paid before/after measurement: formally waived (see Measurement decision).
 - Still needed: a green pull-request workflow run.
 
@@ -76,7 +76,7 @@ Status date: 2026-09-16. Milestone 2 is **not signed off**.
 | 8 | Fake-provider CI guard | Done. Passed on GitHub Actions run 35126923767 (commit `73cd03d`). |
 | 9 | Concurrency, restart, reset and accounting-failure tests | Done. Passed on GitHub Actions run 35126923767. |
 | 10 | Before/after measurement | **Waived** for development because the project has no budget for provider spend. Dry-run and fake-provider evidence is accepted for Milestone 2. One partial paid run happened before the waiver (see Measurement decision). Production cost benchmarking is future work before commercial launch. |
-| 11 | Green GitHub pull-request workflow | **Open. The only remaining blocker.** Green on a push to `main` (run 35126923767: all three jobs passed), but a pull-request run is required and has not happened yet. |
+| 11 | Green GitHub pull-request workflow | **Open. The only remaining blocker.** All Milestone 2 code reached `main` by direct pushes, and the latest push run (35128102003 on `4a1fd69`) is green on all three jobs. A pull-request run is still required. This evidence update is the pull request's diff; no placeholder changes were made. |
 
 ## Local verification
 
