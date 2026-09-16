@@ -1,9 +1,9 @@
 # Milestone 2: Provider Control, Accounting and CI
 
-Status date: 2026-09-16. Milestone 2 is **not signed off**.
+Status date: 2026-09-16. Every Milestone 2 blocker is closed or formally waived. **Awaiting stakeholder sign-off.**
 - CI is green on GitHub for pushes to `main`: run 35126923767 (commit `73cd03d`, the CI fix) and run 35128102003 (commit `4a1fd69`, this evidence plus the harness fix).
 - Paid before/after measurement: formally waived (see Measurement decision).
-- Still needed: a green pull-request workflow run.
+- Pull-request evidence: PR #1 (`milestone-2-pr-evidence`, commit `57bb5a7`); run 35128855230 passed API tests, Web checks and Browser tests.
 
 ## What is enforced
 
@@ -76,7 +76,7 @@ Status date: 2026-09-16. Milestone 2 is **not signed off**.
 | 8 | Fake-provider CI guard | Done. Passed on GitHub Actions run 35126923767 (commit `73cd03d`). |
 | 9 | Concurrency, restart, reset and accounting-failure tests | Done. Passed on GitHub Actions run 35126923767. |
 | 10 | Before/after measurement | **Waived** for development because the project has no budget for provider spend. Dry-run and fake-provider evidence is accepted for Milestone 2. One partial paid run happened before the waiver (see Measurement decision). Production cost benchmarking is future work before commercial launch. |
-| 11 | Green GitHub pull-request workflow | **Open. The only remaining blocker.** All Milestone 2 code reached `main` by direct pushes, and the latest push run (35128102003 on `4a1fd69`) is green on all three jobs. A pull-request run is still required. This evidence update is the pull request's diff; no placeholder changes were made. |
+| 11 | Green GitHub pull-request workflow | **Done.** PR #1 (`milestone-2-pr-evidence` into `main`, commit `57bb5a7`): pull-request run 35128855230 passed API tests, Web checks and Browser tests on Linux. All Milestone 2 code had already reached `main` by direct pushes (latest push run 35128102003 on `4a1fd69`, also green); the PR's diff is this evidence update, with no placeholder changes. |
 
 ## Local verification
 
