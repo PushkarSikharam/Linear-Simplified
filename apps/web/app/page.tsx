@@ -30,6 +30,7 @@ import { productConfig } from "@/lib/product-config";
 import { useRecordSubmit, type CreateRecord } from "@/lib/use-record-submit";
 import { HybridVoiceEngine, VoiceEngineMode, VoiceEngineStatus } from "@/lib/hybrid-voice-engine";
 import type { SpectrumData } from "@/lib/voice-analyzer";
+import { voiceModeLabel } from "@/lib/voice-labels";
 import type {
   DemoAction,
   DemoCycle,
@@ -2887,7 +2888,7 @@ function ConversationCard({
 }) {
   const [draft, setDraft] = useState("");
   const [voiceEngineStatus, setVoiceEngineStatus] = useState<VoiceEngineStatus>("Idle");
-  const [voiceEngineMode, setVoiceEngineMode] = useState<VoiceEngineMode>("azure");
+  const [voiceEngineMode, setVoiceEngineMode] = useState<VoiceEngineMode>("connecting");
   const [spectrum, setSpectrum] = useState<SpectrumData>([15, 20, 15, 18, 12]);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -3242,7 +3243,7 @@ function ConversationCard({
             type="button"
           >
             <span className={`voice-dot ${voiceEngineStatus.toLowerCase()}`} />
-            {isVoiceActive ? "End Voice" : "Start Microsoft Voice"}
+            {isVoiceActive ? "End Voice" : "Start Voice"}
           </button>
 
           <button
@@ -3332,14 +3333,6 @@ function savedWorkspaceEvent(
   }
 
   return event;
-}
-
-function voiceModeLabel(mode: VoiceEngineMode): string {
-  if (mode === "azure") return "Microsoft Voice";
-  if (mode === "connecting") return "Microsoft Voice";
-  if (mode === "gemini") return "Cloud Voice";
-  if (mode === "local") return "Browser Voice";
-  return "Microsoft Voice";
 }
 
 function voiceStatusLabel(status: VoiceEngineStatus): string {

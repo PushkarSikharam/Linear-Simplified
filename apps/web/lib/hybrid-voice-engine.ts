@@ -383,8 +383,8 @@ export class HybridVoiceEngine {
       return;
     }
 
-    // Try server-side neural TTS first. Azure can take a few seconds on cold requests.
-    this.setStatus("Preparing", this.mode === "local" ? "azure" : this.mode);
+    // Try server-side neural TTS first; the provider is named only once the API reports it.
+    this.setStatus("Preparing", this.mode === "local" ? "connecting" : this.mode);
     this.speakOnlyAbort = new AbortController();
     const signal = this.speakOnlyAbort.signal;
     const fetchTimer = setTimeout(() => {

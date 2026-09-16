@@ -4,6 +4,11 @@ A definition version may be bound by many products, including products of differ
 organizations when the definition is platform-shared, so its lifecycle is global: revoking a
 version ends sessions for every product using it. Lifecycle state lives here, never in the
 immutable definition file.
+
+Ownership (platform-shared, or private to one organization) belongs to the definition's
+identity. The first registered version fixes it, and registration and publication both check
+it inside their write transaction, so versions arriving in any order or concurrently can never
+disagree about who may use the definition.
 """
 from __future__ import annotations
 
@@ -55,28 +60,45 @@ class DefinitionRegistry:
         self.source = source
 
     def register(self, definition_id: str, version: int) -> DefinitionVersion:
-        """Record a version as a draft. Re-registering identical content is a no-op."""
+        """Record a version as a draft. Re-registering identical content is a no-op.
+
+        The first registered version establishes the definition's ownership; any version that
+        declares different ownership is rejected.
+        """
         loaded = load_definition(self.source, definition_id, version)
-        existing = self.get(definition_id, version)
-        if existing:
-            if existing.checksum != loaded.checksum:
-                raise RegistryError(
-                    f"{definition_id} v{version} is already registered with different content; "
-                    "publish a new version instead"
-                )
-            return existing
         identity = loaded.definition.definition
         with get_connection() as connection:
-            connection.execute(
-                """
-                insert into definition_versions(
-                  definition_id, version, checksum, ownership, owner_tenant_id, state, registered_at
+            connection.execute("begin immediate")
+            existing = connection.execute(
+                "select checksum from definition_versions where definition_id = ? and version = ?",
+                (definition_id, version),
+            ).fetchone()
+            if existing is not None:
+                if existing["checksum"] != loaded.checksum:
+                    raise RegistryError(
+                        f"{definition_id} v{version} is already registered with different content; "
+                        "publish a new version instead"
+                    )
+            else:
+                established = _identity(connection, definition_id)
+                if established is None:
+                    connection.execute(
+                        "insert into definitions(definition_id, ownership, owner_tenant_id, created_at) "
+                        "values (?, ?, ?, ?)",
+                        (definition_id, identity.ownership, identity.owner_organization, _now()),
+                    )
+                elif established != (identity.ownership, identity.owner_organization):
+                    raise _ownership_conflict(definition_id, version)
+                connection.execute(
+                    """
+                    insert into definition_versions(
+                      definition_id, version, checksum, ownership, owner_tenant_id, state, registered_at
+                    )
+                    values (?, ?, ?, ?, ?, 'draft', ?)
+                    """,
+                    (definition_id, version, loaded.checksum, identity.ownership,
+                     identity.owner_organization, _now()),
                 )
-                values (?, ?, ?, ?, ?, 'draft', ?)
-                """,
-                (definition_id, version, loaded.checksum, identity.ownership,
-                 identity.owner_organization, _now()),
-            )
         return self.get(definition_id, version)
 
     def validate(self, definition_id: str, version: int) -> DefinitionVersion:
@@ -94,11 +116,6 @@ class DefinitionRegistry:
         breaking = False
         if previous is not None:
             earlier = self.load(definition_id, previous.version)
-            if earlier.definition.definition.ownership != current.definition.definition.ownership or (
-                earlier.definition.definition.owner_organization
-                != current.definition.definition.owner_organization
-            ):
-                raise RegistryError(f"{definition_id} v{version} changes ownership; ownership is permanent")
             compatibility = classify(earlier.definition, current.definition)
             breaking = compatibility.change == ChangeClass.BREAKING_REQUIRES_MIGRATION
             if breaking and migration is None:
@@ -106,8 +123,20 @@ class DefinitionRegistry:
                     f"{definition_id} v{version} makes breaking entity changes and needs a reviewed "
                     f"migration: {'; '.join(compatibility.breaking_changes)}"
                 )
+        declared = current.definition.definition
         with get_connection() as connection:
             connection.execute("begin immediate")
+            recorded = connection.execute(
+                "select ownership, owner_tenant_id from definition_versions where definition_id = ? and version = ?",
+                (definition_id, version),
+            ).fetchone()
+            owners = {
+                _identity(connection, definition_id),
+                (declared.ownership, declared.owner_organization),
+                (recorded["ownership"], recorded["owner_tenant_id"]) if recorded else None,
+            }
+            if len(owners) != 1:
+                raise _ownership_conflict(definition_id, version)
             if breaking and migration is not None:
                 migration.apply(connection)
                 # Older sessions would read records in a shape their definition no longer matches.
@@ -189,6 +218,19 @@ class DefinitionRegistry:
             "where definition_id = ? and version = ? and state = ?",
             (target, _now(), definition_id, version, row["state"]),
         )
+
+
+def _identity(connection, definition_id: str) -> tuple[str, str | None] | None:
+    row = connection.execute(
+        "select ownership, owner_tenant_id from definitions where definition_id = ?", (definition_id,)
+    ).fetchone()
+    return (row["ownership"], row["owner_tenant_id"]) if row else None
+
+
+def _ownership_conflict(definition_id: str, version: int) -> RegistryError:
+    return RegistryError(
+        f"{definition_id} v{version} declares different ownership from the definition; ownership is permanent"
+    )
 
 
 def _version(row) -> DefinitionVersion:

@@ -111,6 +111,8 @@ Pixel SaaS platform
 
 **Physical deployment is a separate concept.**
 - **Default:** one shared multi-tenant deployment serves many organizations, with strict logical isolation on every request.
+  - Logical isolation means every request, session, record and usage row is resolved and checked against its organization, team and product.
+  - It does not mean separate compute, storage or network per customer. Documents and sales material must not describe the shared deployment as physically separate services.
 - **Enterprise option (later):** a dedicated deployment for one organization or division runs the same semantics.
 - **Independent identities:** organization identity never derives from deployment identity, e.g. `deployment_id = pixel-prod-us` hosting `tenant_id = microsoft`. Deployment configuration names only the deployment.
 

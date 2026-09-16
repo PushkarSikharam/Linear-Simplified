@@ -59,6 +59,12 @@ backend-derived permissions; owner-bound sessions; authenticated provider endpoi
 Owner: backend/platform. Phase: 2. Gate: unauthenticated requests fail and cross-project
 and cross-customer access tests pass, including direct requests and background jobs.
 
+*Superseded in Milestone 3 (design revision 4):* the default is one shared multi-tenant
+deployment with **logical** isolation per organization, team and product, enforced on every
+request. It does not provide dedicated compute, storage or network boundaries per customer,
+and no document may describe it as physically separate. Dedicated deployments remain a later
+enterprise option.
+
 ### GAP-02: Save failures can look successful - High
 
 Evidence: `apps/web/app/page.tsx` updates local state and uses
@@ -310,7 +316,7 @@ echo, hands-free interruption, and microphone permissions require a separate dev
 
 | Next work | Existing owner/modules | Migration approach |
 | --- | --- | --- |
-| Customer deployment/auth | API routes, DB connection, provider routes | Establish dedicated resources and server principal first |
+| Customer deployment/auth | API routes, DB connection, provider routes | Establish dedicated resources and server principal first (superseded: shared deployment with logical isolation, see GAP-01) |
 | Authoritative records/scope | Product data store, workspace config, schemas | Migrate relationships/IDs and resolve permissions from storage |
 | Reliable mutations | Frontend creation handlers and API writes | Replace optimistic fire-and-forget success with acknowledged commands |
 | Product profiles | Product config, schemas, planner, executor | Version one shared contract; preserve current profile as first adapter |

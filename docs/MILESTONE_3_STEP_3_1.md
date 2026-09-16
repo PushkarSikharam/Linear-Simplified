@@ -1,6 +1,6 @@
 # Milestone 3, Step 3.1: Product Definition Contract, Loader and SaaS Tenancy Model
 
-Status: **signed off by the stakeholder on 2026-09-16.** Committed to `main` as `3221971`; CI green on push. The pull-request CI requirement was waived at sign-off (see GitHub CI below).
+Status: **reopened on 2026-09-16.** A post-sign-off review reproduced three isolation defects, so the earlier sign-off is not evidence that isolation works. Step 3.1a (below) fixes them; 3.1 is signed off again only after 3.1a has a green pull-request run and its final diff is reviewed. 3.2 does not start before then.
 Date: 2026-09-16. Design reference: `docs/MILESTONE_3_PRODUCT_PROFILE_DESIGN.md` (revision 4, section 3A).
 
 ## Scope delivered
@@ -132,6 +132,62 @@ Later steps still go through branch → pull request → green CI before sign-of
 13. **Deletion-test prerequisite.** `tests/e2e/demo-agent.spec.ts` is Linear-specific but lives in core tests; it must move into `products/linear_simplified/tests/` before the 3.8 deletion test.
 14. **Demo seeds fail safe.** `PIXEL_DEMO_SEEDS` defaults to off. Local, demo and test environments (the browser harness, the measurement harness and the test fixtures) set it to `true` explicitly. Tested by `DemoSeedDefaultTest` (unset, `false` and `true`).
 
+## Step 3.1a: isolation hardening
+
+A review after the first sign-off reproduced these defects in temporary databases. Each now has
+an exact regression test in `apps/api/tests/test_isolation_hardening.py`.
+
+| Defect | Reproduction | Fix |
+| --- | --- | --- |
+| Legacy record permissions crossed organizations | `demo-admin`, added to another organization as an ordinary member, read and reset the demo records (both 200) | See "Record access" below |
+| Definition ownership could change | A private v2 was published, then a platform-shared v1 of the same definition | Ownership is part of the definition identity (`definitions` table), fixed by the first registered version and checked inside the registration and publication transactions. Existing registrations are backfilled on migration. |
+| Speech ignored the definition lifecycle | After revocation, `/api/speech` returned 200 and dispatched | See "Speech" below |
+| Voice label claimed a provider | The badge and button said "Microsoft Voice" before any provider answered | A neutral "Voice" until the API reports the engine that produced audio; the button says "Start Voice" |
+
+**Record access** (transitional, until records migrate in 3.5): `app/record_access.py`.
+- The legacy tables belong to one designated product, declared by its seed package. Without a designation nobody can reach them.
+- Record grants are scoped to organization, product and user; they are no longer part of the principal.
+- Every legacy data endpoint requires:
+  - an organization member (never a visitor) of the owning organization
+  - who may use that product: an active organization, team and binding
+  - and who holds a record grant for it.
+- Reset and workspace-wide cycles need the grant's record administration flag.
+- Chat turns check the grant of the requested product.
+
+**Speech.** Every check runs before any reservation or dispatch.
+- With a session: the session must belong to the caller and to this product, and be valid on its pinned definition. A retired version still serves its sessions; a revoked one does not.
+- Without a session: the product's current definition must be startable.
+- A supplied session that is unknown, foreign, unpinned, expired or ended is rejected, never silently treated as sessionless:
+  - unknown, foreign or another product's session: 404
+  - lifecycle refusals: 409, with a reason
+- Tests assert zero provider dispatches **and** zero ledger rows for every refusal, plus positive cases for pinned, sessionless, retired-but-pinned and visitor speech.
+
+**Tests before and after the fixes.**
+
+| Suite | Before fixes | After fixes |
+| --- | --- | --- |
+| `test_isolation_hardening.py` (25 tests at the time) | 19 failed, 6 passed (the passing ones are positive or already-correct cases) | 25 passed |
+| Added afterwards | — | no designated record owner; identity backfill on migration (27 in total) |
+| Existing API suites | — | One test encoded the old behaviour (a foreign speech session was silently ignored); it now asserts rejection. |
+
+**3.1a verification** (no paid providers; no measurement run was needed).
+
+| Check | Windows | Linux rehearsal |
+| --- | --- | --- |
+| Core API suite | 255 passed, 3 CI-only skipped (258 total) | 258 passed (CI guards included) |
+| Linear product API suite | 11 passed | 11 passed |
+| Type check | Passed | Passed |
+| Web unit tests | 23 passed | 23 passed |
+| Production build | — | Passed |
+| Browser suites (core + Linear golden) | 107 passed | 107 passed |
+| Pull-request CI | Pending | |
+
+Exit criteria for signing off 3.1 again:
+- the reproductions fail before the fixes and pass after them (done);
+- existing suites stay green (done);
+- green pull-request CI;
+- a review of the final diff.
+
 ## Sizing for 3.2–3.8
 
 Estimates are in focused working days for the two-person team, sized from what 3.1 exposed.
@@ -147,6 +203,9 @@ They are estimates, not commitments.
 | 3.7 Billing product | 3 days | Definition, seed data, adapter, 10+ browser scenarios, 20-case evaluation, same-organization proof (design 3A) |
 | 3.8 Frozen core and deletion tests | 1–2 days | Purity allowlist emptied; deletion tests for both products |
 | **Total** | **20–24 days** | Roughly double the earlier 10-day experiment timebox |
+
+This is a **revised estimate, not an approved deadline**. It is a scope expansion over the original
+10-day experiment and needs its own schedule decision.
 
 ## Files changed in 3.1
 
