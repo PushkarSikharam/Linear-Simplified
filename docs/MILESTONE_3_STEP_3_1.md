@@ -1,6 +1,6 @@
 # Milestone 3, Step 3.1: Product Definition Contract, Loader and SaaS Tenancy Model
 
-Status: **implemented and verified locally, including a Linux rehearsal. Awaiting commit, a green pull-request run and stakeholder sign-off.**
+Status: **committed to `main` as `3221971`; CI green on push. Awaiting a green pull-request run as review evidence, then stakeholder sign-off.**
 Date: 2026-09-16. Design reference: `docs/MILESTONE_3_PRODUCT_PROFILE_DESIGN.md` (revision 4, section 3A).
 
 ## Scope delivered
@@ -95,6 +95,17 @@ One full Windows browser run had a single failure in the golden `architecture` c
 
 No paid provider was called: every run used `PIXEL_PAID_PROVIDERS_ENABLED=false`,
 `PIXEL_BLOCK_EXTERNAL_HTTP=true` and `LLM_ENABLED=false`.
+
+### GitHub CI
+
+| Run | Trigger | API tests | Web checks | Browser tests |
+| --- | --- | --- | --- | --- |
+| [35144291014](https://github.com/PushkarSikharam/Linear-Simplified/actions/runs/35144291014) | push of `3221971` to `main` | Passed | Passed | Passed |
+
+Process note: the 3.1 implementation was pushed to `main` directly instead of through a
+branch and pull request. The push run above verifies the code. The pull request that
+carries this record is the review evidence the sign-off requires, and its CI run is
+recorded there.
 
 ## Findings that shape the next steps
 
