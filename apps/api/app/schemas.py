@@ -35,7 +35,7 @@ class TurnRequest(BaseModel):
     session_id: str = Field(min_length=1)
     turn_id: int = Field(ge=1)
     product_id: str = Field(min_length=1)
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=2000)
     input_mode: Literal["text", "voice"] = "text"
     current_page: str | None = None
     selected_issue_id: str | None = None

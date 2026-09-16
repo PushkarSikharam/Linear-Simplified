@@ -25,7 +25,6 @@ from app.services.demo_data import (
     find_issues_by_person,
     find_issues_by_person_in_scope,
 )
-from app.services.env import env_int
 from app.services.intent_extractor import IntentExtractor
 from app.services.language_normalizer import normalize_for_intent
 from app.services.reasoning_policy import ReasoningPolicy
@@ -42,7 +41,6 @@ class DemoAgent:
         self.action_planner = ActionPlanner()
         self.action_validator = ActionValidator()
         self.llm_reasoner = AgentReasoner()
-        self.llm_call_counts: dict[str, int] = {}
         self.conversation_manager = ConversationManager()
         self.retriever = ProductRetriever()
 
@@ -66,7 +64,7 @@ class DemoAgent:
             request.session_id,
             request.product_id,
             user_id=owner.user_id if owner else None,
-            customer_id=owner.customer_id if owner else None,
+            tenant_id=owner.tenant_id if owner else None,
             scope_id=request.workspace_scope_id,
         ):
             return self._denied_response(
@@ -152,6 +150,7 @@ class DemoAgent:
                 request,
                 normalized_message,
                 workspace_scope,
+                owner.user_id if owner else None,
             )
             if llm_result:
                 intent_trace, signals, proposed_action = self._apply_llm_result(
@@ -174,6 +173,7 @@ class DemoAgent:
                 request,
                 normalized_message,
                 workspace_scope,
+                owner.user_id if owner else None,
             )
             if llm_result:
                 intent_trace, signals, proposed_action = self._apply_llm_result(
@@ -558,12 +558,13 @@ class DemoAgent:
         request: TurnRequest,
         normalized_message: str,
         workspace_scope: WorkspaceScope,
+        user_id: str | None = None,
     ) -> tuple[AgentReasoningResult | None, list[RetrievedDocument]]:
-        if not self.llm_reasoner.enabled() or not self._can_use_llm(request.session_id):
+        # Per-session, per-user and per-deployment limits are enforced by the usage ledger.
+        if not self.llm_reasoner.enabled():
             return None, []
 
         retrieved_docs = self.retriever.retrieve(request.product_id, normalized_message)
-        self._record_llm_call(request.session_id)
         llm_result = self.llm_reasoner.reason(
             AgentReasoningContext(
                 product_id=request.product_id,
@@ -572,6 +573,9 @@ class DemoAgent:
                 selected_issue_id=request.selected_issue_id,
                 workspace_scope=workspace_scope,
                 retrieved_docs=retrieved_docs,
+                user_id=user_id,
+                session_id=request.session_id,
+                request_id=f"turn:{request.session_id}:{request.turn_id}",
             )
         )
         return llm_result, retrieved_docs
@@ -591,15 +595,6 @@ class DemoAgent:
                 payload=llm_result.proposed_action.payload,
             )
         return intent_trace, updated_signals, proposed_action
-
-    def _can_use_llm(self, session_id: str) -> bool:
-        max_calls = env_int("LLM_MAX_CALLS_PER_SESSION", 25)
-        if max_calls <= 0:
-            return False
-        return self.llm_call_counts.get(session_id, 0) < max_calls
-
-    def _record_llm_call(self, session_id: str) -> None:
-        self.llm_call_counts[session_id] = self.llm_call_counts.get(session_id, 0) + 1
 
     def _should_try_llm_first(self, normalized_message: str, intent_trace: IntentTrace) -> bool:
         if intent_trace.relevant_feature is not None:

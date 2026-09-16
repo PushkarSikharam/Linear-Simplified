@@ -19,6 +19,7 @@ from app.schemas import IntentTrace, TurnRequest
 from app.services.agent import DemoAgent
 from app.services.agent_reasoner import AgentReasoningResult, ReasonedAction
 from app.services.session_manager import SessionManager
+from app.tenancy import deployment_tenant
 
 
 class AuthenticatedTestClient:
@@ -1064,7 +1065,7 @@ class AgentApiTest(unittest.TestCase):
         sessions = SessionManager()
         # The API client is signed in as demo-admin, so the session must belong to that user.
         sessions.ensure_session(
-            "session_test", "linear_simplified", user_id="demo-admin", customer_id="pixel-demo"
+            "session_test", "linear_simplified", user_id="demo-admin", tenant_id=deployment_tenant().tenant_id
         )
         self.assertTrue(sessions.activate_turn("session_test", 9))
 

@@ -251,10 +251,8 @@ class PhaseOneGapTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    def test_gap_01_speech_route_check_rejects_anonymous_callers(self):
-        self.assertEqual(self.client.get("/api/auth/me").status_code, 401)
-        me = self.client.get("/api/auth/me", headers=self._auth_header()).json()
-        self.assertEqual(me["user_id"], "demo-product-eng")
+    def test_gap_01_speech_requires_authentication(self):
+        self.assertEqual(self.client.post("/api/speech", json={"text": "Hello"}).status_code, 401)
 
     # --- GAP-05: session ownership and cancellation ---
 

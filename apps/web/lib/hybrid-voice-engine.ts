@@ -1,7 +1,7 @@
-import { authorizedFetch } from "@/lib/product-data-api";
+import { apiUrl, authorizedFetch } from "@/lib/product-data-api";
 import { SpectrumData, VoiceAnalyzer } from "@/lib/voice-analyzer";
 
-export type VoiceEngineMode = "azure" | "gemini" | "webrtc" | "local" | "connecting";
+export type VoiceEngineMode = "azure" | "gemini" | "local" | "connecting";
 export type VoiceEngineStatus = "Idle" | "Connecting" | "Listening" | "Thinking" | "Preparing" | "Speaking" | "Error";
 
 export type HybridVoiceCallbacks = {
@@ -10,7 +10,12 @@ export type HybridVoiceCallbacks = {
   onUserTranscript: (text: string, isFinal: boolean) => void;
   onAgentSpeech: (text: string) => void;
   onError: (errorMsg: string) => void;
+  /** Conversation the spoken text belongs to, for usage attribution. */
+  getSessionId?: () => string | undefined;
 };
+
+// Neural speech is synthesized by the Pixel API, which owns providers, budgets and accounting.
+const SPEECH_TIMEOUT_MS = 8000;
 
 export class HybridVoiceEngine {
   private mode: VoiceEngineMode = "connecting";
@@ -23,10 +28,6 @@ export class HybridVoiceEngine {
   private currentStream: MediaStream | null = null;
   private isBargeInTriggered = false;
 
-  // WebRTC properties
-  private pc: RTCPeerConnection | null = null;
-  private dataChannel: RTCDataChannel | null = null;
-
   constructor(callbacks: HybridVoiceCallbacks) {
     this.callbacks = callbacks;
   }
@@ -35,7 +36,6 @@ export class HybridVoiceEngine {
 
   /** Clean up all running streams/audio without permanently stopping the engine */
   private cleanup(): void {
-    this.stopWebRTC();
     this.stopLocalEngine();
     this.cancelSpeech();
     this.callbacks.onError("");
@@ -56,28 +56,8 @@ export class HybridVoiceEngine {
 
     if (this.isStopped) return; // User clicked stop during cooldown
 
-    try {
-      // Check session API endpoint for OpenAI key
-      const res = await authorizedFetch("/api/realtime-session");
-      const sessionData = (await res.json()) as {
-        success: boolean;
-        mode: string;
-        client_secret?: string;
-        reason?: string;
-      };
-
-      if (this.isStopped) return; // User clicked stop during fetch
-
-      if (sessionData.success && sessionData.client_secret) {
-        // Start WebRTC mode with OpenAI
-        await this.startWebRTC(sessionData.client_secret);
-      } else {
-        // Fallback to Enhanced Web Audio Local Mode
-        await this.startLocalEngine(sessionData.reason ?? "Using Web Audio Engine");
-      }
-    } catch (err) {
-      await this.startLocalEngine("Failed to reach server session endpoint");
-    }
+    // Realtime provider sessions are disabled; listening always uses browser recognition.
+    await this.startLocalEngine();
   }
 
   public stop(): void {
@@ -139,26 +119,16 @@ export class HybridVoiceEngine {
       // Give Microsoft Azure enough time to synthesize premium speech before falling back.
       // The fallback is intentionally visible in the UI so the demo never mislabels audio.
       try {
-        const timer = setTimeout(() => controller.abort(), 8000);
-        const res = await authorizedFetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-          signal: controller.signal
-        });
+        const timer = setTimeout(() => controller.abort(), SPEECH_TIMEOUT_MS);
+        const res = await this.requestSpeech(text, controller.signal);
         clearTimeout(timer);
         if (gen !== this.speakOnlyGen) {
           finish();
           return;
         }
 
-        if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
-          const engineType = res.headers.get("X-TTS-Engine");
-          if (engineType?.includes("azure")) {
-            this.mode = "azure";
-          } else if (engineType?.includes("gemini")) {
-            this.mode = "gemini";
-          }
+        if (isAudio(res)) {
+          this.mode = modeForEngine(res) ?? this.mode;
 
           const blob = await res.blob();
           if (gen !== this.speakOnlyGen) {
@@ -216,7 +186,7 @@ export class HybridVoiceEngine {
               setTimeout(() => {
                 this.isSpeakingSelf = false;
                 if (!this.isStopped && this.mode === "local") {
-                  void this.startLocalEngine("Resuming after speech");
+                  void this.startLocalEngine();
                 }
               }, 400);
             } else {
@@ -295,7 +265,7 @@ export class HybridVoiceEngine {
         setTimeout(() => {
           this.isSpeakingSelf = false;
           if (!this.isStopped && this.mode === "local") {
-            void this.startLocalEngine("Resuming listening after speech");
+            void this.startLocalEngine();
           }
         }, 400);
       } else {
@@ -319,42 +289,21 @@ export class HybridVoiceEngine {
   private speakOnlyAbort: AbortController | null = null;
   private speakOnlyGen = 0;
 
-  /**
-   * Speak text using TTS without affecting engine status or mic.
-   * Completely independent audio playback — no status changes, no recognition.
-   * Used for auto-greeting and manual message playback.
-   */
-  // In-memory cache for TTS audio blobs to avoid re-fetching the same text
+  // Audio already synthesized this page load, so replaying a message costs nothing.
   private static ttsCache = new Map<string, Blob>();
 
-  public prewarmSpeech(texts: string[]): void {
-    for (const text of texts) {
-      const normalized = text.trim();
-      if (!normalized || HybridVoiceEngine.ttsCache.has(normalized)) continue;
-
-      authorizedFetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: normalized })
-      })
-        .then((res) => {
-          if (!res.ok || !res.headers.get("Content-Type")?.includes("audio")) return null;
-          const engineType = res.headers.get("X-TTS-Engine");
-          if (engineType?.includes("azure")) {
-            this.mode = "azure";
-            this.callbacks.onStatusChange(this.status, this.mode);
-          }
-          return res.blob();
-        })
-        .then((blob) => {
-          if (blob) {
-            HybridVoiceEngine.ttsCache.set(normalized, blob);
-          }
-        })
-        .catch(() => undefined);
-    }
+  private requestSpeech(text: string, signal: AbortSignal): Promise<Response> {
+    return authorizedFetch(apiUrl("/speech"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, session_id: this.callbacks.getSessionId?.() }),
+      signal
+    });
   }
 
+  /**
+   * Speak text without touching the microphone. Used for replaying assistant replies.
+   */
   public speakOnly(text: string, onEnded?: () => void): void {
     this.isStopped = false;
     this.cancelSpeech();
@@ -436,24 +385,16 @@ export class HybridVoiceEngine {
       if (gen === this.speakOnlyGen && this.speakOnlyAbort) {
         this.speakOnlyAbort.abort();
       }
-    }, 8000);
+    }, SPEECH_TIMEOUT_MS);
 
-    authorizedFetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-      signal
-    })
+    this.requestSpeech(text, signal)
       .then((res) => {
         clearTimeout(fetchTimer);
         if (gen !== this.speakOnlyGen) return;
-        if (res.ok && res.headers.get("Content-Type")?.includes("audio")) {
-          const engineType = res.headers.get("X-TTS-Engine");
-          if (engineType?.includes("azure")) {
-            this.mode = "azure";
-            this.callbacks.onStatusChange(this.status, this.mode);
-          } else if (engineType?.includes("gemini")) {
-            this.mode = "gemini";
+        if (isAudio(res)) {
+          const mode = modeForEngine(res);
+          if (mode) {
+            this.mode = mode;
             this.callbacks.onStatusChange(this.status, this.mode);
           }
 
@@ -496,7 +437,7 @@ export class HybridVoiceEngine {
   }
 
   // --- Local Web Audio Engine ---
-  private async startLocalEngine(reasonNote: string): Promise<void> {
+  private async startLocalEngine(): Promise<void> {
     this.mode = "local";
 
     try {
@@ -602,90 +543,23 @@ export class HybridVoiceEngine {
     this.callbacks.onSpectrumChange([15, 20, 15, 18, 12]);
   }
 
-  // --- WebRTC OpenAI Engine ---
-  private async startWebRTC(ephemeralKey: string): Promise<void> {
-    try {
-      this.pc = new RTCPeerConnection();
-
-      // Audio track for playing back agent response
-      const audioEl = document.createElement("audio");
-      audioEl.autoplay = true;
-      this.pc.ontrack = (e) => {
-        audioEl.srcObject = e.streams[0];
-      };
-
-      // Get microphone stream & attach analyzer
-      const stream = await this.analyzer.start((spectrum) => {
-        this.callbacks.onSpectrumChange(spectrum);
-      });
-      this.currentStream = stream;
-
-      stream.getTracks().forEach((track) => this.pc?.addTrack(track, stream));
-
-      // Data Channel for real-time events & text
-      this.dataChannel = this.pc.createDataChannel("oai-events");
-      this.dataChannel.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === "response.audio_transcript.delta") {
-            this.callbacks.onAgentSpeech(msg.delta);
-            this.setStatus("Speaking", "webrtc");
-          } else if (msg.type === "conversation.item.input_audio_transcription.completed") {
-            this.callbacks.onUserTranscript(msg.transcript || "", true);
-            this.setStatus("Thinking", "webrtc");
-          }
-        } catch {
-          // ignore parsing error
-        }
-      };
-
-      // Create WebRTC Offer
-      const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
-
-      const sdpRes = await fetch(
-        `https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview`,
-        {
-          method: "POST",
-          body: offer.sdp,
-          headers: {
-            Authorization: `Bearer ${ephemeralKey}`,
-            "Content-Type": "application/sdp"
-          }
-        }
-      );
-
-      if (!sdpRes.ok) {
-        throw new Error(`OpenAI SDP handshake failed with ${sdpRes.status}`);
-      }
-
-      const answerSdp = await sdpRes.text();
-      await this.pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
-
-      this.setStatus("Listening", "webrtc");
-    } catch (err) {
-      // Fallback to local mode if WebRTC fails
-      this.stopWebRTC();
-      await this.startLocalEngine("WebRTC connection failed. Reverting to Web Audio Engine.");
-    }
-  }
-
-  private stopWebRTC(): void {
-    if (this.dataChannel) {
-      this.dataChannel.close();
-      this.dataChannel = null;
-    }
-    if (this.pc) {
-      this.pc.close();
-      this.pc = null;
-    }
-  }
-
   private setStatus(status: VoiceEngineStatus, mode: VoiceEngineMode): void {
     this.status = status;
     this.mode = mode;
     this.callbacks.onStatusChange(status, mode);
   }
+}
+
+function isAudio(response: Response): boolean {
+  return response.ok && Boolean(response.headers.get("Content-Type")?.includes("audio"));
+}
+
+/** The provider that produced the audio, as reported by the API. */
+function modeForEngine(response: Response): VoiceEngineMode | null {
+  const engine = response.headers.get("X-TTS-Engine") ?? "";
+  if (engine.includes("azure")) return "azure";
+  if (engine.includes("gemini")) return "gemini";
+  return null;
 }
 
 /**

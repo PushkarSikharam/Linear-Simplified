@@ -9,12 +9,18 @@ class ProductConfig:
     name: str
     docs_path: str
     allowed_actions: frozenset[str]
+    # Speaking style given to style-steerable speech models for this product's assistant.
+    voice_style: str
 
 
 LINEAR_SIMPLIFIED = ProductConfig(
     id="linear_simplified",
     name="Pixel",
     docs_path="docs/product",
+    voice_style=(
+        "You are Edith, a soft-spoken, warm, gentle, and natural conversational assistant for Pixel. "
+        "Speak in a soft, calm, friendly female voice with unhurried conversational cadence:"
+    ),
     allowed_actions=frozenset(
         {
             "OPEN_DASHBOARD",

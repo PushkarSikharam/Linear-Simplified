@@ -10,9 +10,10 @@
     "lint:web": "npm --workspace apps/web run lint",
     "test:web": "npm --workspace apps/web run test",
     "test:e2e": "playwright test",
-    "test:api": ".venv\\Scripts\\python -m unittest discover -s apps\\api\\tests",
-    "dev:api": ".venv\\Scripts\\python -m uvicorn app.main:app --app-dir apps\\api --reload --port 8001",
-    "start:api": ".venv\\Scripts\\python -m uvicorn app.main:app --app-dir apps\\api --port 8001"
+    "measure:usage": "playwright test --config playwright.measure.config.ts",
+    "test:api": "node scripts/python.mjs -m unittest discover -s apps/api/tests",
+    "dev:api": "node scripts/python.mjs -m uvicorn app.main:app --app-dir apps/api --reload --port 8001",
+    "start:api": "node scripts/python.mjs -m uvicorn app.main:app --app-dir apps/api --port 8001"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1"

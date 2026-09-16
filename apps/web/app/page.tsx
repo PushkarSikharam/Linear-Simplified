@@ -119,8 +119,6 @@ type SpeechRecognitionWindow = Window &
     SpeechRecognition?: SpeechRecognitionConstructor;
     webkitSpeechRecognition?: SpeechRecognitionConstructor;
     __demoVoiceSilenceTimeoutMs?: number;
-    __disableAutoGreetingSpeech?: boolean;
-    __disableTextResponseSpeech?: boolean;
     __emitVoiceTranscript?: (transcript: string) => void;
     __spokenAgentReplies?: string[];
   };
@@ -130,16 +128,6 @@ const initialTranscript: TranscriptMessage[] = [
     speaker: "Agent",
     text: "Welcome to Pixel. I'm Edith, your guide to planning work, tracking tickets, and connecting your team's tools. What brought you to check us out today?"
   }
-];
-
-const prewarmedVoiceLines = [
-  initialTranscript[0].text,
-  "Cycles organize work into time-boxed planning periods so engineering teams can decide what to focus on, track progress, and review what shipped. I'll show you the current cycle.",
-  "I found LIN-142, assigned to Maya Chen. I'll open that ticket.",
-  "Assignment is handled from the issue detail panel. I'll open a demo issue and highlight the assignee control.",
-  "GitHub keeps engineering activity connected to tickets. Pull requests, commits, branches, and reviews can appear beside the work they belong to. I'll show the GitHub integration.",
-  "Slack lets teams create issues from messages and receive workflow updates where conversations happen. I'll open Integrations and highlight Slack.",
-  "I can only demonstrate Pixel workflows here, so I cannot open that."
 ];
 
 const initialSessionSummary: SessionSummary = {
@@ -1124,6 +1112,7 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
             onCollapse={() => setIsAssistantCollapsed(true)}
             onReset={resetDemoSession}
             onSend={sendMessage}
+            sessionId={sessionId}
             turnStatus={turnStatus}
           />
         )}
@@ -2883,6 +2872,7 @@ function ConversationCard({
   onCollapse,
   onReset,
   onSend,
+  sessionId,
   turnStatus
 }: {
   demoPathPrompts: string[];
@@ -2892,6 +2882,7 @@ function ConversationCard({
   onCollapse: () => void;
   onReset: () => void;
   onSend: (message: string, inputMode?: InputMode) => Promise<AgentTurnResponse | null>;
+  sessionId: string;
   turnStatus: TurnStatus;
 }) {
   const [draft, setDraft] = useState("");
@@ -2900,14 +2891,15 @@ function ConversationCard({
   const [spectrum, setSpectrum] = useState<SpectrumData>([15, 20, 15, 18, 12]);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [voiceError, setVoiceError] = useState("");
-  const [isTTSEnabled, setIsTTSEnabled] = useState(true);
+  // Replies are spoken only after the visitor turns voice on; neural speech is a paid call.
+  const [isTTSEnabled, setIsTTSEnabled] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const voiceEngineRef = useRef<HybridVoiceEngine | null>(null);
   const onSendRef = useRef(onSend);
+  const sessionIdRef = useRef(sessionId);
   const isTTSEnabledRef = useRef(isTTSEnabled);
   const mockVoiceTranscriptRef = useRef("");
   const mockVoiceTimerRef = useRef<number | null>(null);
-  const hasAutoGreeted = useRef(false);
   const isSubmittingVoiceRef = useRef(false);
   const isAgentSpeakingRef = useRef(false);
   const isVoiceActive = voiceEngineStatus !== "Idle" && voiceEngineStatus !== "Error";
@@ -2915,6 +2907,10 @@ function ConversationCard({
   useEffect(() => {
     onSendRef.current = onSend;
   }, [onSend]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     isTTSEnabledRef.current = isTTSEnabled;
@@ -3002,46 +2998,11 @@ function ConversationCard({
       },
       onError: (err) => {
         setVoiceError(err);
-      }
+      },
+      getSessionId: () => sessionIdRef.current
     });
 
     voiceEngineRef.current = engine;
-    engine.prewarmSpeech(prewarmedVoiceLines);
-
-    // Speak initial introduction greeting on visit.
-    // Browser autoplay policy blocks speechSynthesis until user interacts,
-    // so we also register one-time gesture listeners as a fallback.
-    if (!hasAutoGreeted.current && !shouldDisableAutoGreetingSpeech()) {
-      hasAutoGreeted.current = true;
-      const greetingText = initialTranscript[0]?.text;
-      if (greetingText) {
-        let greetingSpoken = false;
-
-        const speakGreeting = () => {
-          if (greetingSpoken) return;
-          greetingSpoken = true;
-          isAgentSpeakingRef.current = true;
-          engine.speakOnly(greetingText, () => {
-            isAgentSpeakingRef.current = false;
-          });
-        };
-
-        // Try immediately (works if cloud TTS responds — cloud audio bypasses autoplay)
-        speakGreeting();
-
-        // Also register gesture listeners for browser voice fallback
-        const onGesture = () => {
-          speakGreeting();
-          window.removeEventListener("pointerdown", onGesture);
-          window.removeEventListener("click", onGesture);
-          window.removeEventListener("keydown", onGesture);
-        };
-        window.addEventListener("pointerdown", onGesture, { once: true });
-        window.addEventListener("click", onGesture, { once: true });
-        window.addEventListener("keydown", onGesture, { once: true });
-      }
-    }
-
     if (isVoiceTestMode()) {
       const speechWindow = window as SpeechRecognitionWindow;
       speechWindow.__emitVoiceTranscript = (transcript: string) => {
@@ -3091,7 +3052,7 @@ function ConversationCard({
     voiceEngineRef.current?.cancelSpeech();
     void (async () => {
       const result = await onSend(message, "text");
-      if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
+      if (result?.speech && isTTSEnabledRef.current) {
         void speakAgentReply(result.speech, "text");
       }
     })();
@@ -3137,10 +3098,8 @@ function ConversationCard({
     }
 
     if (isVoiceActive) {
-      hasAutoGreeted.current = true;
       voiceEngineRef.current?.stop();
     } else {
-      hasAutoGreeted.current = true;
       isAgentSpeakingRef.current = false;
       voiceEngineRef.current?.cancelSpeech();
       setVoiceError("");
@@ -3221,7 +3180,7 @@ function ConversationCard({
                 voiceEngineRef.current?.cancelSpeech();
                 void (async () => {
                   const result = await onSend(prompt, "text");
-                  if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
+                  if (result?.speech && isTTSEnabledRef.current) {
                     void speakAgentReply(result.speech, "text");
                   }
                 })();
@@ -3245,7 +3204,7 @@ function ConversationCard({
               voiceEngineRef.current?.cancelSpeech();
               void (async () => {
                 const result = await onSend(prompt, "text");
-                if (result?.speech && isTTSEnabledRef.current && !shouldDisableTextResponseSpeech()) {
+                if (result?.speech && isTTSEnabledRef.current) {
                   void speakAgentReply(result.speech, "text");
                 }
               })();
@@ -3345,19 +3304,6 @@ function isVoiceTestMode(): boolean {
   );
 }
 
-function shouldDisableAutoGreetingSpeech(): boolean {
-  return (
-    typeof window !== "undefined"
-    && (window as SpeechRecognitionWindow).__disableAutoGreetingSpeech === true
-  );
-}
-
-function shouldDisableTextResponseSpeech(): boolean {
-  return (
-    typeof window !== "undefined"
-    && (window as SpeechRecognitionWindow).__disableTextResponseSpeech === true
-  );
-}
 
 function savedWorkspaceEvent(
   event: UiEvent,
@@ -3391,7 +3337,6 @@ function voiceModeLabel(mode: VoiceEngineMode): string {
   if (mode === "azure") return "Microsoft Voice";
   if (mode === "connecting") return "Microsoft Voice";
   if (mode === "gemini") return "Cloud Voice";
-  if (mode === "webrtc") return "Realtime Voice";
   if (mode === "local") return "Browser Voice";
   return "Microsoft Voice";
 }

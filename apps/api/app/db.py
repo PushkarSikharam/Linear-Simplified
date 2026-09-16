@@ -28,6 +28,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def migrate() -> None:
+    _drop_unowned_usage_table()
     with get_connection() as connection:
         connection.executescript(
             """
@@ -57,6 +58,39 @@ def migrate() -> None:
               request_body text not null,
               response_body text not null
             );
+
+            -- One row per paid-provider attempt, including blocked ones, owned by a
+            -- tenant/product/deployment. Metadata only: never prompts, generated audio,
+            -- credentials or provider error bodies.
+            create table if not exists provider_attempts(
+              attempt_id text primary key,
+              tenant_id text not null,
+              product_id text not null,
+              deployment_id text not null,
+              user_id text not null,
+              session_id text,
+              request_id text not null,
+              capability text not null,
+              provider text not null,
+              model text,
+              unit text not null,
+              reserved_units integer not null default 0,
+              actual_units integer,
+              actual_input_units integer,
+              actual_output_units integer,
+              status text not null,
+              reason text,
+              duration_ms integer,
+              usage_day text not null,
+              created_at text not null,
+              settled_at text
+            );
+            create index if not exists provider_attempts_budget
+              on provider_attempts(tenant_id, product_id, deployment_id, usage_day, capability, user_id);
+            create index if not exists provider_attempts_request
+              on provider_attempts(tenant_id, user_id, request_id);
+            create index if not exists provider_attempts_session
+              on provider_attempts(tenant_id, session_id);
 
             create table if not exists sessions(
               id text primary key,
@@ -173,6 +207,9 @@ def migrate() -> None:
 
     _add_project_foreign_keys()
 
+    from app.services.usage_ledger import UsageLedger
+    UsageLedger().prune_expired()
+
     # Seed demo auth users after schema is ready.
     from app.auth import seed_demo_users
     seed_demo_users()
@@ -214,6 +251,21 @@ _LINKED_TABLES: dict[str, str] = {
         )
     """,
 }
+
+
+def _drop_unowned_usage_table() -> None:
+    """Remove the unreleased first ledger draft, which had no tenant ownership columns.
+
+    It only ever held local development attempts, so it is backed up and recreated
+    rather than converted.
+    """
+    with get_connection() as connection:
+        columns = {row["name"] for row in connection.execute("pragma table_info(provider_attempts)")}
+    if not columns or "tenant_id" in columns:
+        return
+    backup_database()
+    with get_connection() as connection:
+        connection.execute("drop table provider_attempts")
 
 
 def backup_database() -> Path | None:

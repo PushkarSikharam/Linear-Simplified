@@ -19,6 +19,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app.db import get_connection
 from app.services.env import env_bool, env_value
+from app.tenancy import deployment_tenant
 
 # The secret rotates per process; tokens don't survive a server restart,
 # which is fine for the demo.  Set PIXEL_AUTH_SECRET for stable tokens.
@@ -46,13 +47,12 @@ DEMO_USERS: tuple[dict, ...] = (
 )
 
 DEFAULT_DEMO_USER_ID = "demo-product-eng"
-DEFAULT_DEMO_CUSTOMER_ID = "pixel-demo"
 
 
 @dataclass(frozen=True)
 class AuthUser:
     user_id: str
-    customer_id: str
+    tenant_id: str
     scope_ids: frozenset[str]
     is_admin: bool
 
@@ -83,12 +83,14 @@ def seed_demo_users() -> None:
             )
 
 
-def create_token(user_id: str, customer_id: str = DEFAULT_DEMO_CUSTOMER_ID) -> str:
+def create_token(user_id: str, tenant_id: str | None = None) -> str:
     """Create a signed bearer token for the given user.
 
     Looks up the user in access_grants, creates a login_sessions row,
-    and returns the signed token string.
+    and returns the signed token string. Tokens belong to one tenant,
+    by default the tenant this deployment serves.
     """
+    tenant_id = tenant_id or deployment_tenant().tenant_id
     with get_connection() as connection:
         grant = connection.execute(
             "select scope_ids, is_admin from access_grants where user_id = ?",
@@ -98,7 +100,7 @@ def create_token(user_id: str, customer_id: str = DEFAULT_DEMO_CUSTOMER_ID) -> s
             raise ValueError(f"Unknown user: {user_id}")
 
         # The nonce keeps two logins in the same second from producing identical tokens.
-        token = _SERIALIZER.dumps({"uid": user_id, "cid": customer_id, "n": secrets.token_hex(8)})
+        token = _SERIALIZER.dumps({"uid": user_id, "tid": tenant_id, "n": secrets.token_hex(8)})
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         expires_at = time.time() + _TOKEN_MAX_AGE_SECONDS
 
@@ -107,10 +109,11 @@ def create_token(user_id: str, customer_id: str = DEFAULT_DEMO_CUSTOMER_ID) -> s
             "delete from login_sessions where user_id = ? and expires_at < ?",
             (user_id, time.time()),
         )
+        # The login_sessions.customer_id column holds the tenant ID.
         connection.execute(
             "insert into login_sessions(token_hash, user_id, customer_id, expires_at) "
             "values (?, ?, ?, ?)",
-            (token_hash, user_id, customer_id, expires_at),
+            (token_hash, user_id, tenant_id, expires_at),
         )
     return token
 
@@ -134,9 +137,12 @@ def require_auth(authorization: str | None = Header(default=None)) -> AuthUser:
         raise HTTPException(status_code=401, detail="Invalid token.")
 
     user_id = payload.get("uid")
-    customer_id = payload.get("cid", DEFAULT_DEMO_CUSTOMER_ID)
-    if not user_id:
+    tenant_id = payload.get("tid")
+    if not user_id or not tenant_id:
         raise HTTPException(status_code=401, detail="Invalid token payload.")
+    # A deployment serves one tenant; tokens issued for any other tenant are not valid here.
+    if tenant_id != deployment_tenant().tenant_id:
+        raise HTTPException(status_code=401, detail="Token belongs to a different tenant.")
 
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     with get_connection() as connection:
@@ -157,7 +163,7 @@ def require_auth(authorization: str | None = Header(default=None)) -> AuthUser:
     scope_ids = frozenset(json.loads(grant["scope_ids"]))
     return AuthUser(
         user_id=user_id,
-        customer_id=customer_id,
+        tenant_id=tenant_id,
         scope_ids=scope_ids,
         is_admin=bool(grant["is_admin"]),
     )

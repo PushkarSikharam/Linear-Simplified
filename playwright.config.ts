@@ -18,7 +18,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `npx.cmd next dev --port ${webPort}`,
+      command: `npx next dev --port ${webPort}`,
       cwd: "apps/web",
       env: {
         ...process.env,

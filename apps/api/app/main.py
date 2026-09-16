@@ -3,9 +3,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import (
     AuthUser,
@@ -28,9 +28,14 @@ from app.services.product_data_store import (
     RecordNotFound,
     ScopeViolation,
 )
+from app.services.speech_service import SpeechService, SpeechUnavailable
+from app.services.usage_ledger import UsageLedger
+from app.tenancy import deployment_tenant
 
 agent = DemoAgent()
 product_data = ProductDataStore()
+usage = UsageLedger()
+speech_service = SpeechService(usage)
 
 
 @asynccontextmanager
@@ -105,11 +110,6 @@ def demo_login(body: DemoLoginRequest) -> DemoLoginResponse:
 # --- Authenticated endpoints ---
 
 
-@app.get("/api/auth/me")
-def current_user(user: AuthUser = Depends(require_auth)) -> dict:
-    return {"user_id": user.user_id, "scope_ids": sorted(user.scope_ids), "is_admin": user.is_admin}
-
-
 @app.get("/api/demo-data")
 def get_demo_data(user: AuthUser = Depends(require_auth)) -> dict[str, list[dict]]:
     return product_data.load(visible_scope_ids(user))
@@ -169,6 +169,57 @@ def create_demo_team_member(member: MemberInput, workspace_scope_id: str,
     return product_data.save_team_member(member.model_dump(mode="json"), workspace_scope_id, idempotency_key)
 
 
+# --- Paid-provider capabilities (the API is the only component that calls providers) ---
+
+
+class SpeechRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    text: str = Field(min_length=1, max_length=2000)
+    session_id: str | None = Field(default=None, max_length=100)
+
+    @field_validator("text")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("text cannot be blank")
+        return stripped
+
+
+@app.post("/api/speech", response_class=Response)
+def synthesize_speech(body: SpeechRequest, user: AuthUser = Depends(require_auth)) -> Response:
+    tenant = deployment_tenant()
+    # A session is attributed only when it belongs to the caller.
+    session_id = body.session_id
+    if session_id and not agent.sessions.owns_session(session_id, user.user_id, user.tenant_id):
+        session_id = None
+    try:
+        speech = speech_service.synthesize(
+            tenant=tenant, user_id=user.user_id, session_id=session_id, text=body.text
+        )
+    except SpeechUnavailable as unavailable:
+        return JSONResponse(
+            status_code=unavailable.status_code,
+            content={"detail": "Neural voice is unavailable right now.", "reason": unavailable.reason},
+        )
+    headers = {"Cache-Control": "private, no-store", "X-TTS-Engine": speech.engine}
+    if speech.voice:
+        headers["X-TTS-Voice"] = speech.voice
+    return Response(content=speech.audio, media_type=speech.media_type, headers=headers)
+
+
+@app.get("/api/usage/summary")
+def usage_summary(day: str | None = None, user: AuthUser = Depends(require_auth)) -> dict:
+    require_admin(user)
+    tenant = deployment_tenant()
+    return {
+        "tenant_id": tenant.tenant_id,
+        "product_id": tenant.product_id,
+        "deployment_id": tenant.deployment_id,
+        "rows": usage.summary(tenant, day),
+    }
+
 @app.post("/api/turn", response_model=TurnResponse)
 def create_turn(request: TurnRequest,
                 user: AuthUser = Depends(require_auth)) -> TurnResponse:
@@ -179,7 +230,7 @@ def create_turn(request: TurnRequest,
 @app.post("/api/turn/{turn_id}/cancel", response_model=CancelTurnResponse)
 def cancel_turn(turn_id: int, request: CancelTurnRequest,
                 user: AuthUser = Depends(require_auth)) -> CancelTurnResponse:
-    if not agent.sessions.owns_session(request.session_id, user.user_id, user.customer_id):
+    if not agent.sessions.owns_session(request.session_id, user.user_id, user.tenant_id):
         raise HTTPException(status_code=404, detail="This conversation was not found.")
     cancelled = agent.cancel_turn(request.session_id, turn_id)
     return CancelTurnResponse(

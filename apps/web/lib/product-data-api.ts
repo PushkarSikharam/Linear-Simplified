@@ -172,7 +172,7 @@ export async function saveStoredTeamMember(
   return parseJsonResponse<DemoTeamMember>(response);
 }
 
-function apiUrl(path: string): string {
+export function apiUrl(path: string): string {
   const normalizedBase = API_BASE_URL.replace(/\/$/, "");
   return `${normalizedBase}${path}`;
 }

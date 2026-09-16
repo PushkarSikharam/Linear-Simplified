@@ -18,10 +18,12 @@ class SessionManager:
         session_id: str,
         product_id: str,
         user_id: str | None = None,
-        customer_id: str | None = None,
+        tenant_id: str | None = None,
         scope_id: str | None = None,
     ) -> bool:
         """Create or reuse a session. Returns False if it belongs to someone else.
+
+        The conversation_owners.customer_id column holds the owning tenant ID.
 
         Callers without a user (internal tools, unit tests) skip the ownership check;
         API routes always pass the authenticated user.
@@ -41,7 +43,7 @@ class SessionManager:
                     "select user_id, customer_id from conversation_owners where session_id = ?",
                     (session_id,),
                 ).fetchone()
-                if owner is None or (owner["user_id"], owner["customer_id"]) != (user_id, customer_id):
+                if owner is None or (owner["user_id"], owner["customer_id"]) != (user_id, tenant_id):
                     return False
                 connection.execute(
                     "update conversation_owners set scope_id = ? where session_id = ?",
@@ -66,17 +68,17 @@ class SessionManager:
                     insert into conversation_owners(session_id, user_id, customer_id, product_id, scope_id)
                     values (?, ?, ?, ?, ?)
                     """,
-                    (session_id, user_id, customer_id or "", product_id, scope_id or ""),
+                    (session_id, user_id, tenant_id or "", product_id, scope_id or ""),
                 )
             return True
 
-    def owns_session(self, session_id: str, user_id: str, customer_id: str) -> bool:
+    def owns_session(self, session_id: str, user_id: str, tenant_id: str) -> bool:
         with get_connection() as connection:
             owner = connection.execute(
                 "select user_id, customer_id from conversation_owners where session_id = ?",
                 (session_id,),
             ).fetchone()
-        return bool(owner and (owner["user_id"], owner["customer_id"]) == (user_id, customer_id))
+        return bool(owner and (owner["user_id"], owner["customer_id"]) == (user_id, tenant_id))
 
     def activate_turn(self, session_id: str, turn_id: int) -> bool:
         with get_connection() as connection:

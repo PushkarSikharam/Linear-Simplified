@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { createServer } from "node:net";
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { venvPython } from "../../scripts/venv-python.mjs";
 import { E2E_SENTINEL_PORT } from "./ports";
 
 let apiPort: number;
@@ -16,8 +17,6 @@ const agentCancelTurnOneRoute = "**/api/agent/turn/1/cancel";
 declare global {
   interface Window {
     __demoVoiceSilenceTimeoutMs?: number;
-    __disableAutoGreetingSpeech?: boolean;
-    __disableTextResponseSpeech?: boolean;
     __emitVoiceTranscript?: (transcript: string) => void;
     __spokenAgentReplies?: string[];
   }
@@ -28,6 +27,8 @@ let apiDataDir: string | null = null;
 const browserErrors = new WeakMap<Page, string[]>();
 let sentinel: Server | null = null;
 const escapedRequests: string[] = [];
+const externalRequests: string[] = [];
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
 test.beforeAll(async () => {
   sentinel = createHttpServer((request, response) => {
@@ -55,14 +56,17 @@ test.beforeAll(async () => {
   });
   apiDataDir = await mkdtemp(join(tmpdir(), "pixel-e2e-"));
   apiProcess = spawn(
-    ".venv\\Scripts\\python",
-    ["-m", "uvicorn", "app.main:app", "--app-dir", "apps\\api", "--port", String(apiPort)],
+    venvPython(),
+    ["-m", "uvicorn", "app.main:app", "--app-dir", join("apps", "api"), "--port", String(apiPort)],
     {
       cwd: process.cwd(),
       env: {
         ...process.env,
         PIXEL_DB_PATH: join(apiDataDir, "demo.sqlite3"),
         PIXEL_SYNTHETIC_DEMO: "true",
+        // Paid providers are refused before dispatch, and any outbound call fails loudly.
+        PIXEL_PAID_PROVIDERS_ENABLED: "false",
+        PIXEL_BLOCK_EXTERNAL_HTTP: "true",
         LLM_ENABLED: "false"
       },
       stdio: "ignore",
@@ -103,6 +107,7 @@ test.afterEach(async ({ page, context }) => {
   await context.close();
   const escaped = escapedRequests.splice(0);
   expect(escaped, "Requests escaped the isolated test backend").toEqual([]);
+  expect(externalRequests.splice(0), "Browser contacted an external host").toEqual([]);
   expect(browserErrors.get(page) ?? [], "Unexpected browser runtime errors").toEqual([]);
 });
 
@@ -110,15 +115,10 @@ test.beforeEach(async ({ page, context }) => {
   const errors: string[] = [];
   browserErrors.set(page, errors);
   page.on("pageerror", (error) => errors.push(error.message));
-  await context.route("**/api/tts", (route) => route.fulfill({
-    status: 503,
-    contentType: "application/json",
-    body: JSON.stringify({ error: "External speech is disabled in automated tests." })
-  }));
-  await context.route("**/api/realtime-session", (route) => route.fulfill({
-    contentType: "application/json",
-    body: JSON.stringify({ success: false, mode: "local" })
-  }));
+  await context.route((url) => !LOCAL_HOSTS.has(url.hostname), async (route) => {
+    externalRequests.push(new URL(route.request().url()).hostname);
+    await route.abort();
+  });
   const reset = await fetch(`http://127.0.0.1:${apiPort}/api/demo-data/reset`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiToken}` }
@@ -131,10 +131,7 @@ test.beforeEach(async ({ page, context }) => {
 async function openApp(page: Page) {
   await page.addInitScript(() => {
     try { window.sessionStorage?.removeItem("demo_auth_token"); } catch { /* ignore */ }
-    window.__disableAutoGreetingSpeech = true;
-    if (typeof window.__demoVoiceSilenceTimeoutMs !== "number") {
-      window.__disableTextResponseSpeech = true;
-    }
+
   });
   const authDone = page.waitForResponse(
     (resp) => resp.url().includes("/auth/demo-login") && resp.status() === 200
@@ -152,13 +149,18 @@ async function openApp(page: Page) {
   await expect(page.getByTestId("trace-status")).toBeHidden();
 }
 
+// Playwright errors that only mean nobody is waiting for the answer any more.
+const ABANDONED_REQUEST_ERRORS = [
+  "has been closed", // the page or context closed during teardown
+  "has been disposed" // the page aborted the request, e.g. speech cancelled mid-flight
+];
+
 async function forwardToFreshBackend(route: Route) {
   try {
     const response = await route.fetch({ url: freshBackendUrl(route.request().url()) });
     await route.fulfill({ response });
   } catch (error) {
-    // The page closed during teardown while this request was in flight; nothing to answer.
-    if (!String(error).includes("closed")) throw error;
+    if (!ABANDONED_REQUEST_ERRORS.some((message) => String(error).includes(message))) throw error;
   }
 }
 
@@ -204,7 +206,6 @@ async function sendChat(page: Page, message: string) {
 async function installMockVoice(page: Page) {
   await page.addInitScript(() => {
     window.__demoVoiceSilenceTimeoutMs = 100;
-    window.__disableAutoGreetingSpeech = true;
 
     type MockRecognitionResult = {
       isFinal: boolean;
@@ -412,6 +413,27 @@ test("milestone 1 removing a page override preserves backend isolation", async (
   });
   expect(status).toBe(200);
   expect(escapedRequests).toEqual([]);
+});
+
+test("milestone 2 speech is only requested after the visitor turns voice on", async ({ page }) => {
+  const speechRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/agent/speech") speechRequests.push(request.method());
+  });
+
+  await openApp(page);
+  await sendChat(page, "show me the projects");
+  await page.waitForLoadState("networkidle");
+  expect(speechRequests, "No greeting, prewarming or reply speech without consent").toEqual([]);
+
+  await page.getByTestId("tts-toggle").click();
+  const speech = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/agent/speech");
+  await sendChat(page, "show me the cycles");
+  const refused = await speech;
+  // The test API has paid providers switched off, so the API refuses before any dispatch.
+  expect(refused.status()).toBe(429);
+  expect((await refused.json()).reason).toBe("providers_disabled");
+  expect(speechRequests).toEqual(["POST"]);
 });
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
