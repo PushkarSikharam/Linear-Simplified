@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import re
 from pathlib import Path
 from typing import Any
 
-from app.db import get_connection
+from app.db import get_connection, use_connection
 from app.workspace_config import WORKSPACE_SCOPES, WorkspaceScope
 
 
@@ -164,16 +165,19 @@ class ProductDataStore:
                       if project_ids.intersection(json.loads(member["project_ids"]))),
         )
 
-    def get_issue(self, issue_id: str) -> dict[str, Any] | None:
-        self.seed_if_empty()
-        with get_connection() as connection:
+    def get_issue(self, issue_id: str, connection=None) -> dict[str, Any] | None:
+        if connection is None:
+            self.seed_if_empty()
+        with use_connection(connection) as connection:
             row = connection.execute("select * from demo_issues where id = ?", (issue_id,)).fetchone()
         return _issue_from_row(row) if row else None
 
-    def scopes_for_record(self, project_id: str | None, issue_project: str | None = None) -> set[str]:
+    def scopes_for_record(self, project_id: str | None, issue_project: str | None = None,
+                          connection=None) -> set[str]:
         """Workspaces that contain a record, by project ID or, failing that, issue project label."""
-        self.seed_if_empty()
-        with get_connection() as connection:
+        if connection is None:
+            self.seed_if_empty()
+        with use_connection(connection) as connection:
             rows = connection.execute("select * from demo_workspace_scopes").fetchall()
         if project_id:
             return {row["id"] for row in rows if project_id in json.loads(row["allowed_project_ids"])}
@@ -267,41 +271,63 @@ class ProductDataStore:
 
         return self.load()
 
-    def save_issue(self, issue: dict[str, Any], request_key: str | None = None) -> dict[str, Any]:
-        return self._create_record("issue", issue, request_key=request_key)
+    def save_issue(self, issue: dict[str, Any], request_key: str | None = None,
+                   connection=None) -> dict[str, Any]:
+        return self._create_record("issue", issue, request_key=request_key, connection=connection)
 
-    def update_issue(self, issue_id: str, issue: dict[str, Any]) -> dict[str, Any]:
-        self.seed_if_empty()
+    def update_issue(self, issue_id: str, issue: dict[str, Any], connection=None) -> dict[str, Any]:
+        """Change one ticket. With `connection`, the caller owns the transaction (see 3.2 slice 3)."""
+        if connection is None:
+            self.seed_if_empty()
         issue = {**issue, "id": issue_id}
-        with get_connection() as connection:
-            connection.execute("begin immediate")
-            existing = connection.execute(
+        with self._transaction(connection) as open_connection:
+            existing = open_connection.execute(
                 "select * from demo_issues where id = ?", (issue_id,)
             ).fetchone()
             if existing is None:
                 raise RecordNotFound("This ticket no longer exists.")
-            _check_references(connection, "issue", issue, previous_issue=_issue_from_row(existing))
-            self._upsert_issue(connection, issue)
+            _check_references(open_connection, "issue", issue, previous_issue=_issue_from_row(existing))
+            self._upsert_issue(open_connection, issue)
         return issue
 
     def save_project(self, project: dict[str, Any], workspace_scope_id: str,
-                     request_key: str | None = None) -> dict[str, Any]:
-        return self._create_record("project", project, workspace_scope_id, request_key)
+                     request_key: str | None = None, connection=None) -> dict[str, Any]:
+        return self._create_record("project", project, workspace_scope_id, request_key, connection)
 
-    def save_cycle(self, cycle: dict[str, Any], request_key: str | None = None) -> dict[str, Any]:
-        return self._create_record("cycle", cycle, request_key=request_key)
+    def save_cycle(self, cycle: dict[str, Any], request_key: str | None = None,
+                   connection=None) -> dict[str, Any]:
+        return self._create_record("cycle", cycle, request_key=request_key, connection=connection)
 
     def save_team_member(
         self,
         member: dict[str, Any],
         workspace_scope_id: str,
         request_key: str | None = None,
+        connection=None,
     ) -> dict[str, Any]:
-        return self._create_record("member", member, workspace_scope_id, request_key)
+        return self._create_record("member", member, workspace_scope_id, request_key, connection)
+
+    @contextmanager
+    def _transaction(self, connection):
+        """The caller's transaction when one is given, otherwise our own write transaction.
+
+        A supplied connection must already hold `begin immediate`, so the record change and
+        whatever else the caller writes (an execution outcome) commit together.
+        """
+        if connection is not None:
+            if not connection.in_transaction:
+                raise RuntimeError("a caller-owned connection must already hold a write transaction")
+            yield connection
+            return
+        with get_connection() as own_connection:
+            own_connection.execute("begin immediate")
+            yield own_connection
 
     def _create_record(self, kind: str, record: dict[str, Any],
-                       scope_id: str | None = None, request_key: str | None = None) -> dict[str, Any]:
-        self.seed_if_empty()
+                       scope_id: str | None = None, request_key: str | None = None,
+                       connection=None) -> dict[str, Any]:
+        if connection is None:
+            self.seed_if_empty()
         table, key_column, prefix, writer = {
             "issue": ("demo_issues", "id", "PIX", self._upsert_issue),
             "project": ("demo_projects", "id", "PRJ", self._upsert_project),
@@ -310,9 +336,8 @@ class ProductDataStore:
         }[kind]
         request_body = json.dumps([kind, scope_id, record], sort_keys=True)
         record = dict(record)
-        with get_connection() as connection:
+        with self._transaction(connection) as connection:
             # Serialize allocation, duplicate checks, record writes and retry receipts.
-            connection.execute("begin immediate")
             if request_key:
                 receipt = connection.execute(
                     "select * from mutation_receipts where request_key = ?", (request_key,)

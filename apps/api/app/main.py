@@ -24,7 +24,8 @@ from app.auth import (
 from app.definitions.access import AccessDenied, ProductAccess, authorize_product
 from app.definitions.sessions import DefinitionUnavailable, SessionEnded, check_pinned_session, pin_new_session
 from app.db import migrate
-from app.record_access import RecordGrant
+from app.engine.execution import ExecutionRefused
+from app.record_access import RecordGrant, legacy_record_owner
 from app.schemas import CancelTurnRequest, CancelTurnResponse, TurnRequest, TurnResponse
 from app.record_schemas import CycleInput, IssueInput, MemberInput, ProjectInput
 from app.services.agent import DemoAgent
@@ -35,7 +36,9 @@ from app.services.product_data_store import (
     RecordNotFound,
     ScopeViolation,
 )
+from app.services.record_writes import KeyedWriter, RecordChange, require_visible_scope
 from app.services.speech_service import SpeechService, SpeechUnavailable
+from app.services.env import env_bool
 from app.services.usage_ledger import UsageLedger
 from app.product_config import PRODUCTS_BY_ID
 from app.tenancy import deployment_id
@@ -44,11 +47,17 @@ agent = DemoAgent()
 product_data = ProductDataStore()
 usage = UsageLedger()
 speech_service = SpeechService(usage)
+keyed_writes = KeyedWriter()
+
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     migrate()
+    if env_bool("PIXEL_DEMO_SEEDS", default=False):
+        # Demo records are created once, at startup, and never by a request: a refused or
+        # unauthorized request must leave product data exactly as it found it.
+        product_data.seed_if_empty()
     yield
 
 
@@ -72,6 +81,12 @@ async def missing_handler(_: Request, error: RecordNotFound):
 @app.exception_handler(ScopeViolation)
 async def scope_violation_handler(_: Request, error: ScopeViolation):
     return JSONResponse(status_code=403, content={"detail": str(error)})
+
+
+@app.exception_handler(ExecutionRefused)
+async def execution_refused_handler(_: Request, error: ExecutionRefused):
+    # A key that cannot be used is a conflict; a caller whose standing changed is a 403.
+    return JSONResponse(status_code=409 if error.conflict else 403, content={"detail": error.reason})
 
 
 @app.exception_handler(InvalidReference)
@@ -157,22 +172,117 @@ def reset_demo_data(grant: RecordGrant = Depends(require_record_access)) -> dict
 
 @app.post("/api/demo-data/issues")
 def create_demo_issue(issue: IssueInput,
-                      grant: RecordGrant = Depends(require_record_access),
-                      idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
+                      user: AuthUser = Depends(require_member),
+                      idempotency_key: str | None = Header(default=None, max_length=200),
+                      x_execution_key: str | None = Header(default=None, max_length=200),
+                      x_session_id: str | None = Header(default=None, max_length=100)) -> dict:
+    payload = issue.model_dump(mode="json")
+    if x_execution_key:
+        _refuse_legacy_idempotency(idempotency_key)
+        # No legacy request key reaches the store: a second mechanism could report an older
+        # receipt as this action's outcome, so the execution key is the only one.
+        return _keyed(x_execution_key, x_session_id, user, ["create_issue", payload],
+                      lambda product_id: _create_issue(payload, None, user, product_id))
+    grant = require_record_access(user)
     require_any_scope(product_data.scopes_for_record(issue.projectId, issue.project), grant)
-    return product_data.save_issue(issue.model_dump(mode="json"), idempotency_key)
+    return product_data.save_issue(payload, idempotency_key)
 
 
 @app.put("/api/demo-data/issues/{issue_id}")
 def update_demo_issue(issue_id: str, issue: IssueInput,
-                      grant: RecordGrant = Depends(require_record_access)) -> dict:
+                      user: AuthUser = Depends(require_member),
+                      x_execution_key: str | None = Header(default=None, max_length=200),
+                      x_session_id: str | None = Header(default=None, max_length=100)) -> dict:
+    payload = issue.model_dump(mode="json")
+    if x_execution_key:
+        return _keyed(x_execution_key, x_session_id, user, ["update_issue", issue_id, payload],
+                      lambda product_id: _update_issue(issue_id, payload, user, product_id))
+    grant = require_record_access(user)
     existing = product_data.get_issue(issue_id)
     if existing is None:
         raise RecordNotFound("This ticket no longer exists.")
     # The user must be able to see the ticket now and wherever the edit moves it.
     require_any_scope(product_data.scopes_for_record(existing["projectId"], existing["project"]), grant)
     require_any_scope(product_data.scopes_for_record(issue.projectId, issue.project), grant)
-    return product_data.update_issue(issue_id, issue.model_dump(mode="json"))
+    return product_data.update_issue(issue_id, payload)
+
+
+def _create_issue(issue: dict, idempotency_key: str | None, user: AuthUser, product_id: str):
+    """The change a create key authorizes, run inside the keyed write's transaction."""
+    def apply(connection, grant: RecordGrant) -> RecordChange:
+        _require_record_owner(connection, user, product_id)
+        scopes = product_data.scopes_for_record(issue.get("projectId"), issue.get("project"),
+                                                connection=connection)
+        require_visible_scope(scopes, grant)
+        record = product_data.save_issue(issue, idempotency_key, connection=connection)
+        return RecordChange(record["id"], "created", record)
+
+    return apply
+
+
+def _update_issue(issue_id: str, issue: dict, user: AuthUser, product_id: str):
+    """The change an update key authorizes; the ticket must be visible now and after the change."""
+    def apply(connection, grant: RecordGrant) -> RecordChange:
+        _require_record_owner(connection, user, product_id)
+        existing = product_data.get_issue(issue_id, connection=connection)
+        if existing is None:
+            raise RecordNotFound("This ticket no longer exists.")
+        for project_id, project in ((existing["projectId"], existing["project"]),
+                                    (issue.get("projectId"), issue.get("project"))):
+            require_visible_scope(
+                product_data.scopes_for_record(project_id, project, connection=connection), grant
+            )
+        record = product_data.update_issue(issue_id, issue, connection=connection)
+        return RecordChange(issue_id, "updated", record)
+
+    return apply
+
+
+def _reload_issue(connection, grant: RecordGrant, issue_id: str) -> dict | None:
+    """Read one ticket for a replay, under the access the caller has right now."""
+    record = product_data.get_issue(issue_id, connection=connection)
+    if record is None:
+        return None
+    scopes = product_data.scopes_for_record(record["projectId"], record["project"],
+                                            connection=connection)
+    return record if grant.may_use_any(scopes) else None
+
+
+def _refuse_legacy_idempotency(idempotency_key: str | None) -> None:
+    """A keyed write must not also carry the legacy retry header.
+
+    The header selects a stored receipt inside the record store, which would let a dispatched
+    action settle as `executed` while nothing was created. One action, one key, one outcome.
+    """
+    if idempotency_key:
+        raise HTTPException(
+            status_code=400,
+            detail="An execution key is the only idempotency mechanism for an assistant write.",
+        )
+
+
+def _require_record_owner(connection, user: AuthUser, product_id: str) -> None:
+    """Inside the transaction: these records must still belong to this organization's product."""
+    owner = legacy_record_owner(connection)
+    if owner is None or (owner.tenant_id, owner.product_id) != (user.tenant_id, product_id):
+        raise ExecutionRefused("record_access_withdrawn", conflict=False)
+
+
+def _keyed(execution_key: str, session_id: str | None, user: AuthUser, request: list, build) -> dict:
+    """Perform a record write under a one-time execution key, re-checking everything first."""
+    if not session_id:
+        # Without the conversation, the session's definition pin cannot be re-checked.
+        raise ExecutionRefused("session_not_usable", conflict=False)
+    # Nothing here creates reference data. Seeding belongs to the deployment bootstrap, so a
+    # refused or unauthorized request can never change product data (see `load_demo_seeds`).
+    owner = legacy_record_owner()
+    if owner is None or owner.tenant_id != user.tenant_id:
+        raise ExecutionRefused("record_access_withdrawn", conflict=False)
+    return keyed_writes.write(
+        build(owner.product_id), execution_key=execution_key, principal=user,
+        product_id=owner.product_id, session_id=session_id, request=request,
+        reload=_reload_issue,
+    )
 
 
 @app.post("/api/demo-data/projects")

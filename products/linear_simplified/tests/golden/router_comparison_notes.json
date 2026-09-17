@@ -1,0 +1,325 @@
+[
+  {
+    "case": "person-follow-up",
+    "turn": 1,
+    "message": "what about Noah",
+    "expected": {
+      "outcome": "propose:issues_by_assignee",
+      "params": {
+        "filter": "noah-patel"
+      }
+    },
+    "actual": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "reason": "The message names Noah but no ticket word, so no v1 intent matches it. Today's engine reuses the previous request's subject (the issue list) for a bare follow-up. The router has no follow-up rule yet, so it falls back. A follow-up that reapplies the last person-based intent from memory is needed before slice 5.",
+    "resolution": "engine"
+  },
+  {
+    "case": "assignment-workflow",
+    "turn": 0,
+    "message": "How do I assign a ticket?",
+    "expected": {
+      "outcome": "propose:highlight_assignment",
+      "params": {
+        "target": "LIN-142"
+      }
+    },
+    "actual": {
+      "outcome": "clarify:clarify_update_target",
+      "params": {}
+    },
+    "reason": "v1 declares highlight_assignment with record: true, so it needs a specific ticket. No ticket is open in this conversation, so the router asks which ticket to use instead of guessing. Today's engine silently picked LIN-142. v2 should make the assignment walkthrough work without a target record, or name an example record explicitly.",
+    "resolution": "definition_v2"
+  },
+  {
+    "case": "update-outside-person",
+    "turn": 1,
+    "message": "assign it to Avery",
+    "expected": {
+      "outcome": "refuse:scope",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "answer:unknown_person",
+      "params": {}
+    },
+    "reason": "Avery Brooks exists only in the Platform workspace. Today's engine replied that Avery is outside this workspace, which confirms that the person exists. The router treats a person hidden by scope exactly like an unknown person and answers with unknown_person, as the plan's section 7 requires.",
+    "resolution": "security"
+  },
+  {
+    "case": "update-unknown-person",
+    "turn": 1,
+    "message": "assign it to Priya",
+    "expected": {
+      "outcome": "refuse:scope",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "answer:unknown_person",
+      "params": {}
+    },
+    "reason": "Priya is not in any workspace. Today's engine answered 'That work is outside the workspace', a scope reply for someone who does not exist. The router gives the same unknown_person answer it gives for hidden people, so unknown and inaccessible people cannot be told apart.",
+    "resolution": "security"
+  },
+  {
+    "case": "update-without-target",
+    "turn": 0,
+    "message": "make it high priority",
+    "expected": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "clarify:clarify_update_target",
+      "params": {}
+    },
+    "reason": "'make it high priority' names no ticket and nothing is open, so there is no record to update. Today's engine fell back to a generic reply. The router asks which ticket to update (clarify_update_target), following the never-guess rule for mutations.",
+    "resolution": "reviewed_difference"
+  },
+  {
+    "case": "create-open-and-assign",
+    "turn": 0,
+    "message": "Open a new ticket and assign it to Priya",
+    "expected": {
+      "outcome": "propose:create_issue",
+      "params": {
+        "fields": {
+          "assignee": "maya-chen",
+          "title": "Investigate customer onboarding issue"
+        }
+      }
+    },
+    "actual": {
+      "outcome": "propose:highlight_add_member",
+      "params": {
+        "prefill": {
+          "name": "Priya"
+        }
+      }
+    },
+    "reason": "The visitor asked to assign a new ticket to Priya, who is not in the directory. Today's engine created a ticket with an invented title and assigned it to Maya Chen, a person the visitor never named. The router instead proposes adding Priya as a member (highlight_add_member with her name prefilled).",
+    "resolution": "reviewed_difference"
+  },
+  {
+    "case": "member-add-named",
+    "turn": 0,
+    "message": "Add a new member Priya Shah",
+    "expected": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:highlight_add_member",
+      "params": {}
+    },
+    "reason": "v1's second highlight_add_member rule has no unknown_person requirement, so the router proposes the add-member control but cannot prefill 'Priya Shah'. Today's engine gave a generic reply. v2 should give that rule the unknown_person requirement, so the named person is prefilled.",
+    "resolution": "definition_v2"
+  },
+  {
+    "case": "member-add-unnamed",
+    "turn": 0,
+    "message": "Add a new team member",
+    "expected": {
+      "outcome": "propose:open_teams",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:highlight_add_member",
+      "params": {}
+    },
+    "reason": "v1 has a specific rule for adding a member ([add, create, invite, new] + [member, teammate, ...]), which is more specific than the Teams view rule. Today's engine only opened Teams. The router follows the definition and shows the add-member control, which answers the request directly.",
+    "resolution": "reviewed_difference"
+  },
+  {
+    "case": "github-explain",
+    "turn": 0,
+    "message": "How does GitHub work with tickets?",
+    "expected": {
+      "outcome": "propose:highlight_github",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:open_issues",
+      "params": {}
+    },
+    "reason": "Both highlight_github ('github') and open_issues ('tickets') match with one group and one term. Specificity then prefers the longer term, 'tickets'. Today's engine picked highlight_github because v1 was written for first-match order. v2 should make the GitHub rule more specific, for example with a second group for explanation words, or exclude 'github' from the issues rule.",
+    "resolution": "definition_v2"
+  },
+  {
+    "case": "scope-broad-request",
+    "turn": 0,
+    "message": "Show me every team's projects across the company",
+    "expected": {
+      "outcome": "clarify:broad_scope_refused",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:open_projects",
+      "params": {}
+    },
+    "reason": "v1 places broad_scope_refused among clarifications, which apply only when no intent matched. 'projects' matches open_projects, so the router proposes the Projects view instead of refusing the cross-workspace request. v2 should move this rule to guardrails (topic broad_scope), where refusals run first and can only refuse.",
+    "resolution": "definition_v2"
+  },
+  {
+    "case": "scope-outside-person",
+    "turn": 0,
+    "message": "Show Avery's tickets",
+    "expected": {
+      "outcome": "refuse:scope",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:open_issues",
+      "params": {
+        "reply": "unknown_person"
+      }
+    },
+    "reason": "Avery Brooks exists only in the Platform workspace. Today's engine denied the request by saying Avery is outside this workspace, which reveals the person. The router answers exactly as for an unknown name: it shows the visible issue list with the unknown_person reply.",
+    "resolution": "security"
+  },
+  {
+    "case": "scope-platform-outside-person",
+    "turn": 0,
+    "message": "Show Maya's tickets",
+    "expected": {
+      "outcome": "refuse:scope",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:open_issues",
+      "params": {
+        "reply": "unknown_person"
+      }
+    },
+    "reason": "Maya Chen exists only in the Product Engineering workspace. Today's engine told a Platform visitor that Maya is outside their workspace. The router shows the visible issue list with the unknown_person reply, identical to the answer for a name that does not exist.",
+    "resolution": "security"
+  },
+  {
+    "case": "scope-platform-own-person",
+    "turn": 0,
+    "message": "Show Avery's tickets",
+    "expected": {
+      "outcome": "propose:open_issue",
+      "params": {
+        "target": "LIN-131"
+      }
+    },
+    "actual": {
+      "outcome": "propose:issues_by_assignee",
+      "params": {
+        "filter": "avery-brooks"
+      }
+    },
+    "reason": "'Show Avery's tickets' uses the plural, which matches issues_by_assignee (show + tickets, two groups) but not open_issue, whose group only lists the singular 'ticket'. The router filters to Avery's tickets (one result: LIN-131), while today's engine opened LIN-131 directly. v2 should state which of the two the plural request means.",
+    "resolution": "definition_v2"
+  },
+  {
+    "case": "greeting",
+    "turn": 0,
+    "message": "hi",
+    "expected": {
+      "outcome": "answer:greeting",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "reason": "v1 has no rule for greetings, and the contract requires every intent to name an action, so a reply-only intent cannot be declared. Today's engine answered with the greeting from hard-coded code. A platform stage for conversational replies (greeting, identity, capabilities) is needed; it is a platform decision to take before slice 5.",
+    "resolution": "engine"
+  },
+  {
+    "case": "greeting-with-name",
+    "turn": 0,
+    "message": "Hi, I'm Priya",
+    "expected": {
+      "outcome": "answer:greeting_named",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "reason": "Same gap as the plain greeting: no reply-only rule exists, so the router falls back instead of greeting Priya by name (greeting_named). The planned platform stage for conversational replies must also extract the visitor's own name from 'I'm <name>'.",
+    "resolution": "engine"
+  },
+  {
+    "case": "capabilities",
+    "turn": 0,
+    "message": "What can you do?",
+    "expected": {
+      "outcome": "answer:capabilities",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "reason": "'What can you do?' has no v1 rule, because reply-only intents cannot be declared. Today's engine answered with the capabilities reply from hard-coded code. The router falls back; the platform stage for conversational replies must cover capabilities too.",
+    "resolution": "engine"
+  },
+  {
+    "case": "guided-path",
+    "turn": 0,
+    "message": "Run the evaluator demo",
+    "expected": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:open_dashboard",
+      "params": {}
+    },
+    "reason": "v1 routes 'evaluator' and 'demo path' messages to open_dashboard with the guided_path reply. Today's engine did not act on this rule and gave a generic reply. The router follows the definition and proposes the dashboard with the guided path.",
+    "resolution": "reviewed_difference"
+  },
+  {
+    "case": "voice-question",
+    "turn": 0,
+    "message": "How does voice interruption work?",
+    "expected": {
+      "outcome": "answer:knowledge",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "reason": "'How does voice interruption work?' matches no rule. Today's engine answered from its product documents. In the new engine this belongs to the model and knowledge stage (slice 4, with retrieval moving in 3.4), so deterministic routing correctly stops at the fallback.",
+    "resolution": "engine"
+  },
+  {
+    "case": "prospect-profile",
+    "turn": 0,
+    "message": "I'm an engineering manager with a 12 person team moving from Jira",
+    "expected": {
+      "outcome": "propose:open_teams",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "fallback",
+      "params": {}
+    },
+    "reason": "The message matches open_teams ('team') and open_integrations ('jira') equally. The plan forbids breaking ties by file order, so the router falls back instead of guessing. Today's engine opened Teams because that rule comes first in v1. v2 should either separate these rules or treat profile statements through prospect signals rather than navigation.",
+    "resolution": "definition_v2"
+  },
+  {
+    "case": "unknown-person-tickets",
+    "turn": 0,
+    "message": "Show tickets for Zed",
+    "expected": {
+      "outcome": "propose:open_issues",
+      "params": {}
+    },
+    "actual": {
+      "outcome": "propose:open_issues",
+      "params": {
+        "reply": "unknown_person"
+      }
+    },
+    "reason": "Zed is not in the directory. Both engines show the Issues list, but today's engine replied with the generic Issues description, while the router uses the unknown_person reply ('I could not find a ticket for Zed'). That reply tells the visitor why the list is not filtered, and is the same reply hidden people get.",
+    "resolution": "reviewed_difference"
+  }
+]

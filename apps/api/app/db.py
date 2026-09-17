@@ -14,6 +14,16 @@ DB_PATH = Path(os.environ.get("PIXEL_DB_PATH", str(DATA_DIR / "demo_agent.sqlite
 
 
 @contextmanager
+def use_connection(connection: sqlite3.Connection | None = None) -> Iterator[sqlite3.Connection]:
+    """Reuse the caller's connection (and transaction) when given, otherwise open one."""
+    if connection is not None:
+        yield connection
+        return
+    with get_connection() as own_connection:
+        yield own_connection
+
+
+@contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH, timeout=10)
@@ -163,6 +173,36 @@ def migrate() -> None:
               primary key (tenant_id, product_id, user_id),
               foreign key (tenant_id, product_id) references product_bindings(tenant_id, product_id)
             );
+
+            -- One row per action Edith dispatched to a client (Milestone 3, step 3.2). A keyed write
+            -- is accepted only against a row that is still 'dispatched', and its outcome is
+            -- committed in the same transaction as the record change.
+            create table if not exists action_executions(
+              execution_key text primary key,
+              tenant_id text not null,
+              product_id text not null,
+              session_id text not null,
+              turn_id integer not null,
+              user_id text not null,
+              action_key text not null,
+              capability text not null,
+              entity text,
+              target_id text,
+              -- A digest of the write request this key authorizes: enough to match a repeat
+              -- request, and no copy of the customer's data.
+              request_digest text not null,
+              state text not null check (state in ('dispatched', 'executed', 'failed', 'cancelled')),
+              -- The outcome is an identifier and a code. Record content is never stored here;
+              -- a replay reloads the record under the caller's current access.
+              result_record_id text,
+              result_code text,
+              reason text,
+              created_at text not null,
+              expires_at real not null,
+              settled_at text
+            );
+            create index if not exists action_executions_turn
+              on action_executions(session_id, turn_id, state);
 
             -- One row per paid-provider attempt, including blocked ones, owned by a
             -- tenant/product/deployment. Metadata only: never prompts, generated audio,

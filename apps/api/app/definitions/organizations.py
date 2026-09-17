@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.db import get_connection
+from app.db import get_connection, use_connection
 from app.definitions.contract import TenantSettings
 from app.definitions.registry import DefinitionRegistry, RegistryError
 from app.definitions.safety import check_slug, check_text
@@ -63,8 +63,10 @@ class ProductBinding:
 
 
 class OrganizationDirectory:
-    def __init__(self, definitions: DefinitionRegistry | None = None) -> None:
-        self.definitions = definitions or DefinitionRegistry()
+    def __init__(self, definitions: DefinitionRegistry | None = None, connection=None) -> None:
+        # With a connection, reads join the caller's transaction (execution re-checks, 3.2 slice 3).
+        self.definitions = definitions or DefinitionRegistry(connection=connection)
+        self._connection = connection
 
     # --- Organizations and teams ---
 
@@ -79,7 +81,7 @@ class OrganizationDirectory:
         return self.organization(tenant_id)
 
     def organization(self, tenant_id: str) -> Organization | None:
-        with get_connection() as connection:
+        with use_connection(self._connection) as connection:
             row = connection.execute("select * from organizations where tenant_id = ?", (tenant_id,)).fetchone()
         return Organization(row["tenant_id"], row["name"], row["state"]) if row else None
 
@@ -101,7 +103,7 @@ class OrganizationDirectory:
         return self.team(tenant_id, team_id)
 
     def team(self, tenant_id: str, team_id: str) -> Team | None:
-        with get_connection() as connection:
+        with use_connection(self._connection) as connection:
             row = connection.execute(
                 "select * from teams where tenant_id = ? and team_id = ?", (tenant_id, team_id)
             ).fetchone()
@@ -128,14 +130,14 @@ class OrganizationDirectory:
         return self.membership(tenant_id, user_id)
 
     def membership(self, tenant_id: str, user_id: str) -> Membership | None:
-        with get_connection() as connection:
+        with use_connection(self._connection) as connection:
             row = connection.execute(
                 "select * from memberships where tenant_id = ? and user_id = ?", (tenant_id, user_id)
             ).fetchone()
         return Membership(row["tenant_id"], row["user_id"], row["role"], row["team_id"]) if row else None
 
     def organizations_of(self, user_id: str) -> list[str]:
-        with get_connection() as connection:
+        with use_connection(self._connection) as connection:
             rows = connection.execute(
                 "select tenant_id from memberships where user_id = ? order by tenant_id", (user_id,)
             ).fetchall()
@@ -184,7 +186,7 @@ class OrganizationDirectory:
         return self.product(tenant_id, product_id)
 
     def product(self, tenant_id: str, product_id: str) -> ProductBinding | None:
-        with get_connection() as connection:
+        with use_connection(self._connection) as connection:
             row = connection.execute(
                 "select * from product_bindings where tenant_id = ? and product_id = ?", (tenant_id, product_id)
             ).fetchone()

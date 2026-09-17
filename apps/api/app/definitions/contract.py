@@ -371,6 +371,12 @@ class ProductDefinition(Strict):
                     spec = self._field(action.entity, field)
                     if spec is not None and not spec.editable:
                         errors.append(f"action {name}: field {field} is not editable")
+            if action.capability == Capability.CREATE_RECORD and action.entity in self.entities:
+                for field, spec in self.entities[action.entity].fields.items():
+                    if spec.required and field not in action.fields and spec.default is None:
+                        errors.append(
+                            f"action {name}: required field {field} can neither be set nor defaulted"
+                        )
 
     def _check_routing(self, errors: list[str]) -> None:
         for intent in self.intents:

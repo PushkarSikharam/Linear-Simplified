@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-from app.db import get_connection
+from app.db import get_connection, use_connection
 from app.definitions.compatibility import ChangeClass, classify
 from app.definitions.loader import DEFAULT_SOURCE, DefinitionSource, LoadedDefinition, load_definition
 
@@ -56,8 +56,10 @@ class DefinitionVersion:
 
 
 class DefinitionRegistry:
-    def __init__(self, source: DefinitionSource = DEFAULT_SOURCE) -> None:
+    def __init__(self, source: DefinitionSource = DEFAULT_SOURCE, connection=None) -> None:
         self.source = source
+        # With a connection, lifecycle reads join the caller's transaction.
+        self._connection = connection
 
     def register(self, definition_id: str, version: int) -> DefinitionVersion:
         """Record a version as a draft. Re-registering identical content is a no-op.
@@ -154,7 +156,7 @@ class DefinitionRegistry:
         return self._transition(definition_id, version, "revoked")
 
     def get(self, definition_id: str, version: int) -> DefinitionVersion | None:
-        with get_connection() as connection:
+        with use_connection(self._connection) as connection:
             row = connection.execute(
                 "select * from definition_versions where definition_id = ? and version = ?",
                 (definition_id, version),

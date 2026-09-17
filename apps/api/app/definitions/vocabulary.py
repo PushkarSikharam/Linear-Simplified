@@ -44,6 +44,8 @@ RESPONSE_KEYS = frozenset({
     # Added in 3.2: a mutation is described as proposed until it has executed, and actions that
     # need an explicit yes are confirmed or cancelled.
     "record_create_proposed", "record_update_proposed", "confirm_action", "action_cancelled",
+    # Added in 3.2: the question asked when a request names more than one visible person.
+    "clarify_person",
 })
 
 # Whole-message replies that confirm a pending action. Anything else cancels it.

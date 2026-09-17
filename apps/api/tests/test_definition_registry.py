@@ -177,12 +177,19 @@ class CompatibilityTest(RegistryFixture):
     def test_breaking_entity_changes_need_a_migration(self):
         breaking_changes = {
             "removed field": _remove_contact_status,
-            "new required field": lambda d: d["entities"]["contact"]["fields"].update(
-                email={"type": "text", "required": True}),
+            # The create action declares the new field too, so the only remaining problem is the
+            # one this test is about: records stored under version 1 do not have it.
+            "new required field": lambda d: (
+                d["entities"]["contact"]["fields"].update(email={"type": "text", "required": True}),
+                d["actions"]["create_contact"]["fields"].append("email"),
+            ),
             "enum value removed": lambda d: d["entities"]["account"]["fields"]["tier"].update(values=["Pro"]),
             "type changed": lambda d: d["entities"]["account"]["fields"]["name"].update(type="integer"),
             "bound tightened": lambda d: d["entities"]["account"]["fields"]["name"].update(max=10),
-            "became required": lambda d: d["entities"]["contact"]["fields"]["status"].update(required=True),
+            "became required": lambda d: (
+                d["entities"]["contact"]["fields"]["status"].update(required=True),
+                d["actions"]["create_contact"]["fields"].append("status"),
+            ),
         }
         self.publish()
         for label, mutate in breaking_changes.items():

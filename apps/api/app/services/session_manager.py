@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from app.db import get_connection
+from app.db import get_connection, use_connection
 from app.definitions.sessions import SessionPin
 from app.schemas import SessionSummary, Signal
 
@@ -90,9 +90,9 @@ class SessionManager:
         with get_connection() as connection:
             return connection.execute("select 1 from sessions where id = ?", (session_id,)).fetchone() is not None
 
-    def pin_for(self, session_id: str) -> SessionPin | None:
+    def pin_for(self, session_id: str, connection=None) -> SessionPin | None:
         """The product and definition pin a session started with, or None if unknown or unpinned."""
-        with get_connection() as connection:
+        with use_connection(connection) as connection:
             row = connection.execute(
                 """
                 select product_id, tenant_id, team_id, definition_id, definition_version,
@@ -114,8 +114,8 @@ class SessionManager:
             expires_at=datetime.fromisoformat(row["expires_at"]),
         )
 
-    def owns_session(self, session_id: str, user_id: str, tenant_id: str) -> bool:
-        with get_connection() as connection:
+    def owns_session(self, session_id: str, user_id: str, tenant_id: str, connection=None) -> bool:
+        with use_connection(connection) as connection:
             owner = connection.execute(
                 "select user_id, customer_id from conversation_owners where session_id = ?",
                 (session_id,),

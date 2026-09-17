@@ -5,37 +5,65 @@ session's `RecordLookup` on the turn that uses it.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import Any
 
-from app.engine.actions import ConfirmationReason, GenericAction, RecordRef
+from app.engine.actions import ConfirmationReason, GenericAction, RecordRef, frozen_value
 
 # A pending question or confirmation is answered on the next turn or not at all.
 PENDING_TURNS = 1
+# A question is asked again at most once after an answer that does not fit.
+MAX_REPEATS = 1
+# What a pending question waits for.
+EXPECTED_SLOTS = frozenset({"person", "record", "choice"})
 
 
 @dataclass(frozen=True)
 class PendingClarification:
     key: str  # the response key that asked the question
     action_key: str | None  # the action waiting for the answer, if any
-    expected: str  # "person", "record" or "choice"
+    expected: str  # one of EXPECTED_SLOTS
     candidates: tuple[RecordRef, ...] = ()
     rejected: tuple[RecordRef, ...] = ()
     # The one candidate the assistant's last reply named, if it named exactly one.
     singled_out: RecordRef | None = None
+    # A target already resolved before the question was asked (for example, the record to update).
+    target: RecordRef | None = None
+    # Field values already resolved before the question was asked (an immutable snapshot).
+    fields: Mapping[str, Any] | None = None
+    # The normalized request that led to the question, so a short answer can be read in context.
+    context: str | None = None
     turn: int = 0
+    # How often the question was repeated after an unrelated answer.
+    repeats: int = 0
 
     def __post_init__(self) -> None:
+        if self.fields is not None:
+            object.__setattr__(self, "fields", frozen_value(self.fields))
+        if self.expected not in EXPECTED_SLOTS:
+            raise ValueError(f"unknown expected slot {self.expected}")
         if len(self.candidates) > 3:
             raise ValueError("a clarification offers at most three candidates")
         if self.singled_out is not None and self.singled_out not in self.candidates:
             raise ValueError("the singled-out candidate must be one of the candidates")
 
+    def reject(self, refs: tuple[RecordRef, ...]) -> "PendingClarification":
+        """Remove rejected candidates. Nothing is selected in their place."""
+        remaining = tuple(ref for ref in self.candidates if ref not in refs)
+        return replace(self, candidates=remaining, rejected=(*self.rejected, *refs), singled_out=None)
+
     def reject_singled_out(self) -> "PendingClarification":
         """Remove the candidate a correction refers to. Never selects another one."""
         if self.singled_out is None:
             raise ValueError("no candidate was singled out, so a correction cannot remove one")
-        remaining = tuple(c for c in self.candidates if c != self.singled_out)
-        return replace(self, candidates=remaining, rejected=(*self.rejected, self.singled_out), singled_out=None)
+        return self.reject((self.singled_out,))
+
+    def repeated(self, turn: int) -> "PendingClarification | None":
+        """The same question asked again, or None once it has been repeated enough."""
+        if self.repeats >= MAX_REPEATS:
+            return None
+        return replace(self, repeats=self.repeats + 1, turn=turn)
 
 
 @dataclass(frozen=True)
