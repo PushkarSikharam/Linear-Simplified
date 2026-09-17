@@ -1,6 +1,6 @@
 # Milestone 3.2, Slice 2: Normalizer, Intent Router and Conversation Memory
 
-Status: **approved at the local implementation level; final sign-off pending green Linux CI on the pull request.** Comparison mode only: nothing in this slice is wired into the runtime. Reviewed together with slice 3; four routing defects found in these components during that review are fixed and recorded in `docs/MILESTONE_3_STEP_3_2_SLICE_3.md`.
+Status: **signed off by the stakeholder on 2026-09-17, after green Linux CI.** Comparison mode only: nothing in this slice is wired into the runtime. Reviewed and signed off together with slice 3; four routing defects found in these components during that review were fixed first, and are recorded with the CI evidence in `docs/MILESTONE_3_STEP_3_2_SLICE_3.md`.
 Date: 2026-09-17. Plan: `docs/MILESTONE_3_STEP_3_2_PLAN.md` (revision 3.2).
 
 ## What was built
