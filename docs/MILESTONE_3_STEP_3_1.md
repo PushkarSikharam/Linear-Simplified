@@ -1,6 +1,6 @@
 # Milestone 3, Step 3.1: Product Definition Contract, Loader and SaaS Tenancy Model
 
-Status: **reopened on 2026-09-16.** A post-sign-off review reproduced three isolation defects, so the earlier sign-off is not evidence that isolation works. Step 3.1a (below) fixes them; 3.1 is signed off again only after 3.1a has a green pull-request run and its final diff is reviewed. 3.2 does not start before then.
+Status: **signed off by the stakeholder on 2026-09-16, after step 3.1a.** 3.1 was reopened when a post-sign-off review reproduced three isolation defects; 3.1a fixed them (PR #2, merged as `3d80deb`, green pull-request and `main` CI). 3.2 may begin.
 Date: 2026-09-16. Design reference: `docs/MILESTONE_3_PRODUCT_PROFILE_DESIGN.md` (revision 4, section 3A).
 
 ## Scope delivered
@@ -187,7 +187,7 @@ Exit criteria for signing off 3.1 again:
 - the reproductions fail before the fixes and pass after them (done);
 - existing suites stay green (done);
 - green pull-request CI (done: PR #2);
-- a review of the final diff.
+- a review of the final diff (done: reviewed and merged by the stakeholder; 3.1 signed off).
 
 ## Sizing for 3.2–3.8
 
