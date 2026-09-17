@@ -1,6 +1,6 @@
 # Milestone 3.2, Slice 3: Validator, Lookup, Execution Boundary and Translator
 
-Status: **approved at the local implementation level; final sign-off pending green Linux CI on the pull request.** Three review rounds reproduced eight defects on this branch — four in routing and validation, one dishonest translation, and two in the transaction boundary itself. All eight are fixed with regression tests, and the stakeholder has approved the routing, validation, translation, lookup and transaction-boundary work. Slice 4 may begin once CI is green.
+Status: **signed off by the stakeholder on 2026-09-17, after green Linux CI.** Three review rounds reproduced eight defects on this branch — four in routing and validation, one dishonest translation, and two in the transaction boundary itself. All eight were fixed with regression tests before sign-off. Slice 4 may begin.
 Date: 2026-09-17. Plan: `docs/MILESTONE_3_STEP_3_2_PLAN.md` (revision 3.3), sections 4, 5, 7 and 9.
 Scope: this is Milestone 3.2, slices 2 and 3. Step 3.3 has not been started.
 
@@ -139,12 +139,12 @@ matching is all it is for; it is not treated as a privacy boundary. A retention 
 not required for sign-off, and deleting settled rows past a horizon would cost nothing, because
 nothing depends on them for content.
 
-### Green CI — the remaining condition
+### Green CI — met
 
-Everything CI runs was run locally first, on Windows. Local runs are development evidence only:
-the pull request's Linux run is what counts, and neither slice is complete until it is green. The
-current figures are under **Complete run after the fixes** below; earlier figures in this document's
-history are superseded by that run.
+Everything CI runs was run locally on Windows first, as development evidence only; the pull
+request's Linux run is what counted. It is green, including the browser tests, and the branch is
+merged — see **CI evidence** at the end of this document. Local figures are under **Complete run
+after the fixes** below.
 
 No paid provider call was made in any run: `LLM_ENABLED=false` throughout, and `MEASURE_PAID` was
 never set.
@@ -205,10 +205,9 @@ Finding 5 was about this report, and is corrected above: the status line no long
 approval or completion, and the runtime-change wording now says what actually changed.
 
 **What the stakeholder approved:** the minimal ledger, the replay contract as worded above, and —
-after the third review round — slices 2 and 3 at the local implementation level: routing,
-validation, translation, lookup and the transaction boundary, each with regression coverage.
-**What is still outstanding:** the branch must be pushed and every Linux CI job must be green.
-Slice 4 begins after that.
+after the third review round — slices 2 and 3: routing, validation, translation, lookup and the
+transaction boundary, each with regression coverage. Green Linux CI was the final condition and is
+met, so both slices are signed off and slice 4 may begin.
 
 ## Second transaction review: two more defects
 
@@ -283,5 +282,16 @@ caught it immediately, which is what it is for.
 
 33 tests were added for the reproductions: 14 routing, 11 reference-shape, 8 on the transaction
 boundary, and the translator's untranslatable-action rule. No paid provider call was made. These
-are Windows runs; the pull request's Linux CI is still the evidence that counts, and the branch is
-not pushed.
+are Windows runs; the Linux CI run that decided sign-off is recorded under **CI evidence**.
+
+## CI evidence
+
+| Item | Value |
+| --- | --- |
+| Branch | `milestone-3-2-slice-2-router` |
+| Commit | `8ff6034` |
+| Pull request | [#6](https://github.com/PushkarSikharam/Linear-Simplified/pull/6) |
+| CI run | [35269535751](https://github.com/PushkarSikharam/Linear-Simplified/actions/runs/35269535751) |
+| Jobs | API tests, Web checks, **Browser tests (2m37s)**, Vercel deployment, preview comments — all pass, none skipped |
+| Merge commit | `a725566` |
+| Paid provider calls | none |
