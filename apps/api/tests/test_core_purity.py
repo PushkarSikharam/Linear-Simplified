@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core_purity import REPO_ROOT, core_files, product_term_hits, relative
+from core_purity import REPO_ROOT, core_files, product_ids, product_term_hits, relative
 
 KNOWN_PRODUCT_COUPLING = {
     # Backend conversation engine: generalized in 3.2.
@@ -45,6 +45,10 @@ KNOWN_PRODUCT_COUPLING = {
 }
 
 
+# The single registry entry point that names installed product packages (3.2 plan, section 9).
+PRODUCT_REGISTRY = "apps/api/app/installed_products.py"
+
+
 class CorePurityTest(unittest.TestCase):
     def test_core_files_are_scanned(self):
         scanned = {relative(path) for path in core_files()}
@@ -55,9 +59,25 @@ class CorePurityTest(unittest.TestCase):
         coupled = {
             relative(path): product_term_hits(path)
             for path in core_files()
-            if relative(path) not in KNOWN_PRODUCT_COUPLING and product_term_hits(path)
+            if relative(path) not in KNOWN_PRODUCT_COUPLING
+            and relative(path) != PRODUCT_REGISTRY
+            and product_term_hits(path)
         }
         self.assertEqual(coupled, {}, "Core files must not name product concepts; move them to a product package")
+
+    def test_the_product_registry_only_names_packages(self):
+        # Product names may appear there only as package imports and definition IDs.
+        lines = [
+            line.strip() for line in (REPO_ROOT / PRODUCT_REGISTRY).read_text(encoding="utf-8").splitlines()
+            if any(product_id in line for product_id in product_ids())
+        ]
+        self.assertTrue(lines)
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertTrue(
+                    line.startswith("from products.") or line.startswith("return index_packages("),
+                    "the registry may only import and list product packages",
+                )
 
     def test_allowlist_only_shrinks(self):
         existing = {relative(path) for path in core_files()}

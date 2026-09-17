@@ -41,7 +41,16 @@ RESPONSE_KEYS = frozenset({
     "broad_scope_refused", "clarify_create", "clarify_assign", "clarify_owner",
     "clarify_all_items", "clarify_update_target", "people_count", "anchor_count",
     "conversation_ended",
+    # Added in 3.2: a mutation is described as proposed until it has executed, and actions that
+    # need an explicit yes are confirmed or cancelled.
+    "record_create_proposed", "record_update_proposed", "confirm_action", "action_cancelled",
 })
+
+# Whole-message replies that confirm a pending action. Anything else cancels it.
+AFFIRMATIONS = frozenset({"yes", "yes please", "confirm", "go ahead", "do it"})
+
+# Replies that reject the candidate the assistant singled out. They never select another candidate.
+CORRECTION_CUES = frozenset({"no", "not that one", "the other one", "wrong one"})
 
 # Parameters an intent may ask the router to extract from the visitor's message.
 INTENT_REQUIREMENTS = frozenset({"person", "record", "selected_record", "unknown_person"})

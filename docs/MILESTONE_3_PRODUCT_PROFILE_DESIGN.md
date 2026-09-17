@@ -482,7 +482,7 @@ be gone by the end of Milestone 3.
 | Shim | Purpose | Owner | Introduced | Removed | Tests |
 | --- | --- | --- | --- | --- | --- |
 | `/api/demo-data/*` routes | Serve the current web app while it still uses Linear-shaped data | Backend | Exists today; reimplemented on the record store in 3.5 | 3.6 | Existing API and browser suites |
-| Generic action → legacy Linear executor | Let the current web app execute backend-decided generic actions | Web | 3.3 | 3.6 | Unit tests for each action mapping; browser suite |
+| Generic action → legacy action names | Let the current web app execute backend-decided generic actions. **Changed in the 3.2 plan:** one backend translator in the Linear product package (registered in code, never loaded from a definition) replaces the web shim planned for 3.3, so there is only ever one translator. | Backend (product package) | 3.2 | 3.6 | One test per mapping, plus a missing-mapping test; browser suite |
 
 ## 10. Milestone 3 sequence
 
@@ -492,7 +492,7 @@ Each step lands as its own pull request with green Linux CI. Sizing happens afte
 | --- | --- | --- |
 | **3.1 Contract** | Definition schema and validator (all of section 5); capability vocabulary; registry tables, lifecycle transitions, compatibility check; session pinning, revocation and maximum age; Linear definition v1 expressed without behaviour change; **golden baseline** covering current backend decisions **and** browser-local decisions; core purity check introduced with its initial allowlist | All existing suites green; golden baseline recorded; security tests from section 11 that apply to 3.1 passing |
 | **3.2 Generic engine** | Normalizer, intent router, action-contract validator, prompt builder (with delimiting), response composer, all driven by the pinned definition | Golden backend decisions reproduced; purity allowlist shrinks |
-| **3.3 One backend pipeline** | Browser decision behaviour moved into the definition's intents and clarifications; browser engine deleted; executor shim added | Golden browser decisions reproduced by the backend; no browser code chooses product actions or answers product questions |
+| **3.3 One backend pipeline** | Browser decision behaviour moved into the definition's intents and clarifications; browser engine deleted; the browser executes the backend translator's output (added in 3.2), so no second shim is added | Golden browser decisions reproduced by the backend; no browser code chooses product actions or answers product questions |
 | **3.4 Knowledge** | Tenant knowledge store; pinned knowledge version; seed package | Retrieval cannot cross tenant, product or knowledge version |
 | **3.5 Records** | Record store, relationships, scopes and anchors; migration (section 7.5); generic records API; demo-data shim on the new store | Rehearsed migration with matching counts; isolation and scope tests green |
 | **3.6 Web** | Generic shell and views; per-product adapter packages; both shims removed | Linear demo runs entirely from its definition and adapter package |
