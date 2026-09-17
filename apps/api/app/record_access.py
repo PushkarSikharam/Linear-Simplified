@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from app.db import get_connection
+from app.db import get_connection, use_connection
 
 
 @dataclass(frozen=True)
@@ -49,8 +49,8 @@ def designate_legacy_owner(tenant_id: str, product_id: str) -> None:
         )
 
 
-def legacy_record_owner() -> LegacyRecordOwner | None:
-    with get_connection() as connection:
+def legacy_record_owner(connection=None) -> LegacyRecordOwner | None:
+    with use_connection(connection) as connection:
         row = connection.execute("select tenant_id, product_id from legacy_record_owner").fetchone()
     return LegacyRecordOwner(row["tenant_id"], row["product_id"]) if row else None
 
@@ -65,8 +65,8 @@ def grant_records(tenant_id: str, product_id: str, user_id: str, scope_ids: list
         )
 
 
-def record_grant(tenant_id: str, product_id: str, user_id: str) -> RecordGrant | None:
-    with get_connection() as connection:
+def record_grant(tenant_id: str, product_id: str, user_id: str, connection=None) -> RecordGrant | None:
+    with use_connection(connection) as connection:
         row = connection.execute(
             "select scope_ids, is_admin from record_grants where tenant_id = ? and product_id = ? and user_id = ?",
             (tenant_id, product_id, user_id),

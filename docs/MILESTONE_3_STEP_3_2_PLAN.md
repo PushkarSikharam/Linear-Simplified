@@ -1,6 +1,6 @@
 # Milestone 3, Step 3.2: Generic Conversation Engine — Implementation Plan
 
-Status: **plan, revision 3.1. Slice 1 is approved to start; the milestone is not approved.** Revision 3.1 clarifies failure outcomes, expiry and the mandatory slice 3 review.
+Status: **plan, revision 3.3. Slice 1 is signed off. Slices 2 and 3 are approved at the local implementation level after three review rounds, which reproduced eight defects now fixed with regression tests; their final sign-off, and the start of slice 4, depend on green Linux CI. The milestone is not approved.** Revision 3.2 recorded the routing rules as built in slice 2 (section 3, stages 5 and 6). Revision 3.3 records two stakeholder decisions from the slice 3 transaction reviews: the execution ledger stores identifiers and outcomes, never raw customer record content, and a replay returns the record's current visible state without a second write (section 5).
 Date: 2026-09-17. Design references: `docs/MILESTONE_3_PRODUCT_PROFILE_DESIGN.md` sections 5, 8, 9.1, 10 and 11; `docs/MILESTONE_3_STEP_3_1.md`.
 
 Revision 3 corrects four findings in the execution and confirmation rules:
@@ -100,13 +100,16 @@ The router evaluates these stages in order and stops at the first that decides.
    - **Mutations need an explicit yes.** When a correction leaves exactly one candidate for a mutating action, the action is validated with `correction_requires_confirmation`. It then goes through stage 2, and is never executed directly from a correction.
    - **Anything else:** the question is asked again once, then expires.
 4. **Exact phrases.** An intent or clarification whose `exact` list contains the whole normalized message wins.
-5. **Intent match groups.** Among intents whose every `match` group has a hit and no `exclude` term is present:
-   - **higher specificity wins:** the number of match groups, then the total number of matched terms, then the length of the longest matched term;
-   - **a remaining tie never falls back to file order.** It produces a clarification: the first matching clarification rule, else the platform `fallback` response.
-6. **Requirement extraction** for the winning intent (`person`, `record`, `selected_record`, `unknown_person`), through `RecordLookup`:
-   - exactly one visible match: proceed;
-   - several visible matches: ask with at most three candidates, recorded as pending;
-   - no visible match: the `unknown_person` response, or an ask when the requirement is a record.
+5. **Intent match groups** (with stage 6). Every intent whose every `match` group has a hit, and no `exclude` term, is evaluated together with its requirements.
+   - **Specificity**, compared in this order: an exact phrase; the number of match groups; the number of requirements satisfied; the number of distinct matched terms; the length of the longest matched term. Revision 3.2 added "requirements satisfied", so that "Maya's ticket" (open one record) beats "tickets" (open the list) without relying on file order.
+   - **A remaining tie never falls back to file order.** When the most specific satisfiable intents propose different things, the first matching clarification rule asks, else the platform `fallback` answers.
+6. **Requirements** (`person`, `record`, `selected_record`, `unknown_person`) are resolved through `RecordLookup`, which is always scope-bound.
+   - **Satisfied:** exactly one visible match.
+   - **Ambiguous** (several visible matches): the router asks with at most three candidates, recorded as pending. It uses the slot's platform question first (`clarify_assign` for people, `clarify_update_target` for records), then the first matching clarification rule.
+   - **Missing** (nothing named): the first matching clarification rule asks, else the record question when a record is missing, recorded as pending.
+   - **Not visible** (a name was given, but no visible person has it): the most specific satisfiable intent still proceeds, with the `unknown_person` reply; if there is none, `unknown_person` is the answer. Hidden and non-existent people therefore produce identical results.
+   - **Precedence:** an unsatisfied intent affects the result only when it is more specific than the best satisfied one. Among unsatisfied intents, ambiguous comes before missing, and missing before not visible.
+   - **Not applicable:** an `unknown_person` requirement with no unknown name simply does not apply.
 7. **Clarification rules.** If no intent matched, the first matching clarification rule asks its question and records it as pending.
 8. **Model path.** Used only when enabled, within budget, and none of the stages above decided. The proposal passes through `ModelProposalParser` and `ActionContractValidator`. Any failure falls back to stage 9. Model output never authorizes anything and never completes a pending state.
 9. **Fallback.** The definition's `fallback` response, or the platform default.
@@ -196,7 +199,11 @@ One keyed write is **one database transaction** (`begin immediate`). The followi
 2. **Load the key and apply the replay contract** (section 5.3).
 3. **Check the request.** The request must equal the bound action, target and field values.
 4. **Perform the record mutation.**
-5. **Store the outcome** (`executed` with its result, or `failed` with its reason) on the key row.
+5. **Store the outcome** on the key row: `executed` with the changed record's ID and a result code, or `failed` with its reason. The ledger stores identifiers only — never a copy of the record, the submitted field values or the request body, of which it keeps a digest (stakeholder decision, slice 3 review). The digest is derived data, not a secret.
+
+**One mechanism only.** An assistant-originated write is made idempotent by its execution key and by nothing else. A keyed request that also carries the legacy retry header is refused, because a second mechanism could report an older receipt as this action's outcome.
+
+**No request creates reference data.** Demo records are seeded by the deployment's startup, behind the explicit seed switch. Authorization and the key claim therefore always precede any change, and a refused request leaves product data exactly as it found it.
 
 **What the transaction guarantees:**
 - **Concurrency.** SQLite serializes writers, so concurrent requests with the same key produce **exactly one** mutation. Every other request sees the stored outcome.
@@ -213,7 +220,7 @@ One keyed write is **one database transaction** (`begin immediate`). The followi
 | Key state | Request | Result |
 | --- | --- | --- |
 | `dispatched`, not expired | Same owner, identical request | Execute (section 5.2) |
-| `executed` | Same owner, identical request | Return the stored result; no second write |
+| `executed` | Same owner, identical request | Same execution attempt, no second write; return the record's current visible state. If it is gone or no longer visible to them, refuse with `execution_result_unavailable` |
 | `failed` (rule rejection, committed) | Same owner, identical request | Return the stored failure; no retry under this key. A retry needs a new turn and a new key. |
 | `dispatched` after a rolled-back attempt (unexpected error, nothing committed) | Same owner, identical request, not expired | Retry allowed |
 | any state | Different parameters, action or target | `409`, nothing written |
@@ -222,7 +229,7 @@ One keyed write is **one database transaction** (`begin immediate`). The followi
 
 **Expiry and authorization for replay:**
 - **Expiry only stops unused keys.** It prevents an unused `dispatched` key from executing. It never erases, relabels or re-executes a committed `executed` or `failed` outcome.
-- **Replay needs current authorization.** Returning a stored result still requires the step 1 checks to pass now. A caller who has lost access gets a refusal, not the stored result.
+- **Replay needs current authorization.** A replay still requires the step 1 checks to pass now, and it reads the record through the caller's present access. A caller who has lost access gets a refusal, never content.
 
 **Durability:** the outcome is stored in the same row, and committed with the mutation. Replay protection therefore survives restarts.
 
@@ -350,7 +357,7 @@ This is not the second-product milestone (3.7).
 ### 10.6 Execution
 - **Execution failure:** the write is rejected by a rule. The key is stored `failed`, and replaying it returns the same failure without a write. No completion wording is ever produced for it, and a later "what changed?" reports nothing changed.
 - **Replay contract:** one test per row of the section 5.3 table, including a restart between execution and replay (a fresh store and engine on the same database).
-- **Concurrent duplicates:** several threads send the same key at once. Exactly one mutation happens, and every response carries the same stored result.
+- **Concurrent duplicates:** several threads send the same key at once. Exactly one mutation happens, and every response describes that one record.
 - **Cancellation race:**
   - **Cancellation committed first:** the write is refused and nothing is written.
   - **Execution committed first:** a later cancellation leaves the key `executed`, and the record keeps its new value.

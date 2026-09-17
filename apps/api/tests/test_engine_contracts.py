@@ -306,18 +306,26 @@ class RoutingContractTest(unittest.TestCase):
              "intent_groups", "requirements", "clarification_rules", "model", "fallback"],
         )
 
-    def test_results_carry_actions_only_when_they_act_or_confirm(self):
+    def test_results_carry_proposals_only_when_they_propose_or_confirm(self):
         definition = load_engine_definition()
-        action = GenericAction.for_definition(definition, "open_contacts", view="contacts")
-        RouteResult(RouteKind.ACTION, RouteStage.INTENT_GROUPS, "view_opened", action=action)
+        proposal = GenericAction.for_definition(definition, "open_contacts", view="contacts")
+        RouteResult(RouteKind.PROPOSE, RouteStage.INTENT_GROUPS, "view_opened", proposal=proposal)
         with self.assertRaises(ValueError):
-            RouteResult(RouteKind.REFUSE, RouteStage.REFUSALS, "out_of_scope", action=action)
+            RouteResult(RouteKind.REFUSE, RouteStage.REFUSALS, "out_of_scope", proposal=proposal, topic="x")
         with self.assertRaises(ValueError):
-            RouteResult(RouteKind.ACTION, RouteStage.INTENT_GROUPS, "view_opened")
+            RouteResult(RouteKind.PROPOSE, RouteStage.INTENT_GROUPS, "view_opened")
         with self.assertRaises(ValueError):
-            RouteResult(RouteKind.CONFIRM, RouteStage.PENDING_CLARIFICATION, "confirm_action", action=action)
-        RouteResult(RouteKind.CONFIRM, RouteStage.PENDING_CLARIFICATION, "confirm_action", action=action,
+            RouteResult(RouteKind.CONFIRM, RouteStage.PENDING_CLARIFICATION, "confirm_action", proposal=proposal)
+        RouteResult(RouteKind.CONFIRM, RouteStage.PENDING_CLARIFICATION, "confirm_action", proposal=proposal,
                     confirmation_reason=ConfirmationReason.CORRECTION)
+
+    def test_only_proposals_can_be_confirmed_and_only_refusals_name_a_topic(self):
+        with self.assertRaises(ValueError):
+            RouteResult(RouteKind.CLARIFY, RouteStage.REQUIREMENTS, "clarify_owner", confirmed=True)
+        with self.assertRaises(ValueError):
+            RouteResult(RouteKind.REFUSE, RouteStage.REFUSALS, "out_of_scope")
+        with self.assertRaises(ValueError):
+            RouteResult(RouteKind.FALLBACK, RouteStage.FALLBACK, "fallback", topic="x")
 
 
 class PlatformVocabularyTest(unittest.TestCase):
@@ -353,11 +361,14 @@ class LookupBoundaryTest(unittest.TestCase):
         self.assertEqual(self.lookup.search("contact", "Fay", 5), self.lookup.search("contact", "Nobody", 5))
         self.assertEqual(self.lookup.by_person("contact", "cara-singh", 5), [])
         self.assertEqual(self.lookup.count("contact"), 2)
+        self.assertIsNone(self.lookup.get("agent", "cara-singh"))
 
     def test_hidden_people_look_exactly_like_unknown_people(self):
-        self.assertEqual(self.lookup.people("Ana", 3).unique.id, "ana-lopez")
+        self.assertEqual(self.lookup.people("Lopez", 3).unique.id, "ana-lopez")
+        self.assertEqual(self.lookup.people("Ana Lopez", 3).unique.id, "ana-lopez")
         self.assertEqual(self.lookup.people("Cara", 3), self.lookup.people("Priya", 3))
-        self.assertIsNone(self.lookup.people("a", 3).unique, "several matches are never collapsed to one")
+        self.assertIsNone(self.lookup.people("Ana", 3).unique, "several matches are never collapsed to one")
+        self.assertEqual(self.lookup.people("a", 3).matches, (), "people match on whole name parts only")
 
 
 class InstalledProductsTest(unittest.TestCase):

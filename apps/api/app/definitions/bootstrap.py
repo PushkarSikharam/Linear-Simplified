@@ -4,6 +4,11 @@ A product package may ship `seed/demo_organization.json`, describing a synthetic
 team, members and product for demos and tests. Seeds load only when `PIXEL_DEMO_SEEDS=true`
 is set explicitly; when it is missing, nothing synthetic is ever created. Existing rows
 are left alone, so operator changes such as a version rollback survive restarts.
+
+Demo *record* data is loaded by the application's startup instead (see `main.lifespan`), because
+this module must not depend on the record store. Either way it is deliberately not created on
+demand by a request: a request that is refused, or that fails authorization, must never leave
+product data different from how it found it.
 """
 from __future__ import annotations
 
