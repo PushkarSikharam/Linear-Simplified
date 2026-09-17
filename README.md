@@ -69,7 +69,7 @@ AZURE_SPEECH_REGION=eastus
 AZURE_SPEECH_VOICE_NAME=en-US-JennyNeural
 ```
 
-Put those values in `.env.local`. The Speech key must stay server-side and must not be committed. If a key was pasted into chat or shared anywhere, rotate it in Azure before using it.
+Put those values in the repository-root `.env.local` (the API reads only the root `.env.local` and `.env`, never `apps/web/.env.local`). The Speech key must stay server-side and must not be committed. If a key was pasted into chat or shared anywhere, rotate it in Azure before using it.
 
 Root scripts:
 

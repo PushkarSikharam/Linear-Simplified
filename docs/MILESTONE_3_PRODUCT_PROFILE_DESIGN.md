@@ -553,10 +553,10 @@ Each step lands as its own pull request with green Linux CI. Sizing happens afte
 ## 13. Carried-forward debt (unchanged)
 
 - **Provider keys and voices** are deployment-wide. `voice_style` is product-owned; credentials stay deployment configuration.
-- **Configuration file:** the API still reads `apps/web/.env.local`.
+- **Configuration file:** resolved on 2026-09-17. The API reads only the repository-root `.env.local` and `.env`.
 - **Old column names:** `customer_id` still holds tenant IDs; possibly addressed in 3.5.
 - **Speech limits:** there is no per-session cap on speech.
-- **Voice label:** "Microsoft Voice" overstates the active provider; addressed only through the generic shell in 3.6.
+- **Voice label:** resolved in step 3.1a. The label stays neutral until the API reports the engine that produced audio.
 
 ## 14. Stakeholder decisions recorded
 

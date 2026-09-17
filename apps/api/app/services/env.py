@@ -15,16 +15,14 @@ API_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT = API_ROOT.parents[1]
 
 
+# Only the API's own developer files. The web app's env files are never read, so provider
+# credentials cannot live next to browser configuration.
+API_ENV_FILES = (REPO_ROOT / ".env.local", REPO_ROOT / ".env")
+
+
 @lru_cache(maxsize=1)
 def _env_files() -> tuple[dict[str, str], ...]:
-    return tuple(
-        _read_env_file(path)
-        for path in (
-            REPO_ROOT / ".env.local",
-            REPO_ROOT / ".env",
-            REPO_ROOT / "apps" / "web" / ".env.local",
-        )
-    )
+    return tuple(_read_env_file(path) for path in API_ENV_FILES)
 
 
 def env_value(name: str) -> str | None:

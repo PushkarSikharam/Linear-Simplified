@@ -31,6 +31,14 @@ class EnvValueTest(unittest.TestCase):
         os.environ["GEMINI_API_KEY"] = "process-key"
         self.assertEqual(env_value("GEMINI_API_KEY"), "process-key")
 
+    def test_web_app_env_files_are_never_read(self):
+        web_root = env_module.REPO_ROOT / "apps" / "web"
+        self.assertTrue(env_module.API_ENV_FILES)
+        for path in env_module.API_ENV_FILES:
+            with self.subTest(path=path):
+                self.assertNotEqual(path.parent, web_root)
+                self.assertFalse(path.is_relative_to(web_root))
+
     def test_hermetic_runs_ignore_developer_files(self):
         os.environ["PIXEL_IGNORE_ENV_FILES"] = "true"
         self.assertIsNone(env_value("GEMINI_API_KEY"))

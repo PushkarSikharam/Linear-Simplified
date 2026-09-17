@@ -165,13 +165,13 @@ The stakeholder briefly authorized a bounded paid measurement (20-attempt ceilin
 ## Local development changes
 
 - The API needs `PIXEL_SYNTHETIC_DEMO=true` before the demo can sign in.
-- Provider keys belong only in the API's environment. The API still also reads `apps/web/.env.local`, as a legacy convenience; move the keys to a root `.env`.
+- Provider keys belong only in the API's environment. Since 2026-09-17 the API no longer reads `apps/web/.env.local`; keys go in the repository-root `.env.local` or `.env`.
 - Replies are silent until "Voice On" is selected.
 
 ## Known debt (carried forward, not Milestone 2)
 
 - Provider credentials, voices and budgets are deployment-wide settings, not tenant-configurable. `configured_speech_providers(tenant)` and `capability_policy(tenant, ...)` are the seams for per-tenant configuration.
-- The API still reads `apps/web/.env.local`. Configuration should move to API-only files.
+- ~~The API still reads `apps/web/.env.local`.~~ Resolved on 2026-09-17: the API reads only root-level files.
 - `conversation_owners.customer_id` and `login_sessions.customer_id` hold tenant IDs under the old column name.
 - Speech has no session limit. Its attempts are attributed to a session only when the session belongs to the caller.
 - The voice labels ("Start Microsoft Voice", and a "Microsoft Voice" badge before any audio plays) overstate the provider (GAP-08).
