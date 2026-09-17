@@ -1,0 +1,51 @@
+"""The installed product packages: the only core module that imports product code.
+
+Packages are listed here explicitly, in code, and looked up by definition ID. Nothing is ever
+imported from a path or name supplied by a definition. A definition without an installed
+package fails closed.
+
+Imports happen inside `installed_packages()`, so importing this module has no side effects.
+"""
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from functools import lru_cache
+from types import MappingProxyType
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ProductPackage:
+    definition_id: str
+    # Builds a scope-bound RecordLookup for one caller (added in slice 3).
+    lookup_factory: Callable[..., Any] | None = None
+    # Translates validated generic actions for the current web app (added in slice 3; removed in 3.6).
+    legacy_translator: Callable[..., Any] | None = None
+
+
+class PackageMissing(LookupError):
+    """No installed package serves this definition."""
+
+
+def index_packages(packages: Iterable[ProductPackage]) -> Mapping[str, ProductPackage]:
+    index: dict[str, ProductPackage] = {}
+    for package in packages:
+        if package.definition_id in index:
+            raise ValueError(f"two installed packages serve {package.definition_id}")
+        index[package.definition_id] = package
+    return MappingProxyType(index)
+
+
+@lru_cache(maxsize=1)
+def installed_packages() -> Mapping[str, ProductPackage]:
+    from products.linear_simplified.backend.package import PACKAGE as linear_simplified
+
+    return index_packages([linear_simplified])
+
+
+def package_for(definition_id: str) -> ProductPackage:
+    try:
+        return installed_packages()[definition_id]
+    except KeyError:
+        raise PackageMissing(definition_id) from None
