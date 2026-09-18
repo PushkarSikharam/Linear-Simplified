@@ -2651,3 +2651,10 @@ h3 {
   color: #f87171;
   font-size: 11px;
 }
+
+.voice-fallback-text {
+  margin: 0;
+  color: #fbbf24;
+  font-size: 11px;
+  line-height: 1.35;
+}

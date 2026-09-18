@@ -145,6 +145,9 @@ test("milestone 2 speech is only requested after the visitor turns voice on", as
   expect(refused.status()).toBe(429);
   expect((await refused.json()).reason).toBe("providers_disabled");
   expect(speechRequests).toEqual(["POST"]);
+  await expect(page.getByTestId("voice-fallback")).toHaveText(
+    "Cloud voice unavailable. Using browser voice."
+  );
 });
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
