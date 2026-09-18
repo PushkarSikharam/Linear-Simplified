@@ -1,0 +1,317 @@
+"""The response composer (3.2 plan, slice 4b; sections 8.2 and 8.5).
+
+Everything the assistant says comes from here, and the rule that matters most is simple: **the
+wording follows the lifecycle state, not the model's enthusiasm.** A proposal is described as a proposal.
+Only a committed write is described as done.
+
+    proposed             "I'll close CON-1."            nothing has happened yet
+    awaiting_confirmation "Should I close CON-1?"       the visitor has not agreed yet
+    executed             "CON-1 is now closed."         the write committed
+    failed               "I could not close CON-1."     a rule rejected it
+    cancelled            "Okay, I won't change anything."
+    clarification        "Which contact do you mean?"
+
+No model-written sentence is spoken in this slice. Safety-critical lifecycle wording is owned by
+the platform and filled only from validated actions or committed results. Product definitions own
+identity, capability and clarification copy, but cannot redefine what proposed, executed, failed
+or cancelled means.
+"""
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+
+from app.definitions.contract import ProductDefinition
+from app.definitions.safety import check_text
+from app.engine.actions import GenericAction
+from app.engine.knowledge import Grounding
+
+# Words that assert a change already happened. Checked against model-written speech only.
+COMPLETION_CLAIMS = (
+    "done", "i've", "i have", "has been", "have been", "is now", "are now", "updated it",
+    "created it", "assigned it", "closed it", "changed it", "moved it", "successfully",
+    "completed", "all set", "that's set", "i updated", "i created", "i assigned", "i changed",
+    "i closed", "i moved", "i've added", "added it",
+)
+
+_PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+
+
+class Stage(StrEnum):
+    """What has actually happened, which is what the wording must match."""
+
+    PROPOSED = "proposed"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+    EXECUTED = "executed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    CLARIFICATION = "clarification"
+    ANSWER = "answer"
+    REFUSED = "refused"
+    # A question nothing installed can answer. Not a refusal: the request was fine, the
+    # deployment simply has no source for it.
+    UNGROUNDED = "ungrounded"
+
+
+# Stages where a model may write the sentence itself. **Empty, deliberately.**
+#
+# Executing one action proves that one action succeeded; it does not make any other sentence true,
+# and "I deleted every customer" passes every lexical check ever written. Retrieving a passage
+# proves a document exists; it does not make a sentence about that document accurate. Until a
+# reply can be bound to its citation and the binding evaluated (3.4 and later), every word the
+# assistant says is composed deterministically from the product's templates and the committed result.
+MODEL_SPEECH_STAGES: frozenset[Stage] = frozenset()
+
+# The parser already caps model speech; the composer does not rely on that being the only path.
+MAX_MODEL_SPEECH = 2000
+
+# Which templates each stage may use. **Enforced**, not advisory: a stage can only ever say
+# something its own list allows, so a failed action can never reach for success wording.
+STAGE_TEMPLATES: Mapping[Stage, frozenset[str]] = {
+    Stage.PROPOSED: frozenset({"record_create_proposed", "record_update_proposed", "view_opened",
+                               "record_opened", "records_filtered", "control_highlighted"}),
+    Stage.AWAITING_CONFIRMATION: frozenset({"confirm_action"}),
+    Stage.EXECUTED: frozenset({"record_created", "record_updated", "view_opened", "record_opened",
+                               "records_filtered", "control_highlighted"}),
+    Stage.CANCELLED: frozenset({"action_cancelled"}),
+    # A failure explains itself. None of these can assert that anything changed.
+    Stage.FAILED: frozenset({"fallback", "next_step", "nothing_changed", "out_of_scope",
+                             "destructive_refused", "person_outside_scope", "work_outside_scope",
+                             "broad_scope_refused", "member_missing", "unknown_person"}),
+    Stage.CLARIFICATION: frozenset({"clarify_create", "clarify_assign", "clarify_owner",
+                                    "clarify_all_items", "clarify_update_target", "clarify_person",
+                                    "correction"}),
+    Stage.REFUSED: frozenset({"out_of_scope", "destructive_refused", "person_outside_scope",
+                              "work_outside_scope", "broad_scope_refused", "unknown_person",
+                              "member_missing", "fallback"}),
+    Stage.ANSWER: frozenset({"greeting", "greeting_named", "identity", "capabilities", "fallback",
+                             "guided_path", "next_step", "last_change", "nothing_changed",
+                             "people_count", "anchor_count", "conversation_ended",
+                             "knowledge_unavailable"}),
+    Stage.UNGROUNDED: frozenset({"knowledge_unavailable"}),
+}
+
+# Lifecycle assertions are platform-owned. A product may rename itself and its records, but a
+# customer-authored response template cannot turn "proposed" or "failed" into "completed".
+PLATFORM_LIFECYCLE_TEMPLATES: Mapping[tuple[Stage, str], str] = {
+    (Stage.PROPOSED, "record_create_proposed"): "I'll create this record with {changes}.",
+    (Stage.PROPOSED, "record_update_proposed"): "I'll update {record_id}: {changes}.",
+    (Stage.PROPOSED, "view_opened"): "I'll open {view}.",
+    (Stage.PROPOSED, "record_opened"): "I'll open {record_id}.",
+    (Stage.PROPOSED, "records_filtered"): "I'll filter the available records.",
+    (Stage.PROPOSED, "control_highlighted"): "I'll highlight the requested control in {view}.",
+    (Stage.AWAITING_CONFIRMATION, "confirm_action"): "Should I apply this change: {changes}?",
+    (Stage.EXECUTED, "record_created"): "Created {record_id}: {changes}.",
+    (Stage.EXECUTED, "record_updated"): "Updated {record_id}: {changes}.",
+    (Stage.EXECUTED, "view_opened"): "Opened {view}.",
+    (Stage.EXECUTED, "record_opened"): "Opened {record_id}.",
+    (Stage.EXECUTED, "records_filtered"): "Filtered the available records.",
+    (Stage.EXECUTED, "control_highlighted"): "Highlighted the requested control in {view}.",
+    (Stage.CANCELLED, "action_cancelled"): "Okay, I won't make that change.",
+}
+
+LIFECYCLE_STAGES = frozenset({
+    Stage.PROPOSED, Stage.AWAITING_CONFIRMATION, Stage.EXECUTED, Stage.FAILED, Stage.CANCELLED,
+})
+PLATFORM_FAILURE = "I couldn't complete that request."
+PLATFORM_KNOWLEDGE_UNAVAILABLE = (
+    "I don't have approved {product} information to answer that, so I won't guess."
+)
+
+
+class TemplateNotAllowed(ValueError):
+    """A stage was asked to speak with wording that does not belong to it."""
+
+# A completed mutation and a proposed one use different templates for the same action.
+EXECUTED_BY_CAPABILITY = {
+    "CREATE_RECORD": "record_created",
+    "UPDATE_RECORD": "record_updated",
+    "NAVIGATE_VIEW": "view_opened",
+    "OPEN_RECORD": "record_opened",
+    "FILTER_RECORDS": "records_filtered",
+    "HIGHLIGHT_CONTROL": "control_highlighted",
+}
+PROPOSED_BY_CAPABILITY = {
+    "CREATE_RECORD": "record_create_proposed",
+    "UPDATE_RECORD": "record_update_proposed",
+    "NAVIGATE_VIEW": "view_opened",
+    "OPEN_RECORD": "record_opened",
+    "FILTER_RECORDS": "records_filtered",
+    "HIGHLIGHT_CONTROL": "control_highlighted",
+}
+
+
+class MissingTemplate(LookupError):
+    """The definition declares no wording for something the platform needs to say."""
+
+
+@dataclass(frozen=True)
+class Reply:
+    """What the assistant says, and the evidence for why it was allowed to say it."""
+
+    speech: str
+    stage: Stage
+    template_key: str | None
+    from_model: bool = False
+    replaced_model_speech: bool = False
+    sources: tuple[str, ...] = ()
+
+
+class ResponseComposer:
+    """Turns verified state into platform lifecycle copy or scoped product conversation copy."""
+
+    def __init__(self, definition: ProductDefinition, *, visitor_name: str | None = None) -> None:
+        self._definition = definition
+        self._visitor = visitor_name
+
+    # --- the lifecycle ---
+
+    def proposed(self, action: GenericAction, **values: str) -> Reply:
+        key = PROPOSED_BY_CAPABILITY[str(action.capability)]
+        return self._render_lifecycle(Stage.PROPOSED, key, self._action_values(action, values))
+
+    def awaiting_confirmation(self, action: GenericAction, **values: str) -> Reply:
+        described = self._action_values(action, values)
+        template = (
+            "Should I update {record_id}: {changes}?"
+            if action.target is not None
+            else "Should I create this record with {changes}?"
+        )
+        return self._render_platform(Stage.AWAITING_CONFIRMATION, "confirm_action", template,
+                                     described)
+
+    def executed(self, action: GenericAction, **values: str) -> Reply:
+        key = EXECUTED_BY_CAPABILITY[str(action.capability)]
+        return self._render_lifecycle(Stage.EXECUTED, key, self._action_values(action, values))
+
+    def failed(self, action: GenericAction, reason_key: str = "fallback", **values: str) -> Reply:
+        """A rejected change is never described as done, and never invents a cause.
+
+        `reason_key` is checked against this stage's allowlist, so a failure cannot be worded with
+        a template that asserts success.
+        """
+        return self._render_lifecycle(Stage.FAILED, reason_key, self._action_values(action, values))
+
+    def cancelled(self, **values: str) -> Reply:
+        return self._render_lifecycle(Stage.CANCELLED, "action_cancelled", values)
+
+    def clarification(self, template_key: str, **values: str) -> Reply:
+        return self._render(Stage.CLARIFICATION, template_key, values)
+
+    def refused(self, template_key: str, **values: str) -> Reply:
+        return self._render(Stage.REFUSED, template_key, values)
+
+    def answer(self, template_key: str, **values: str) -> Reply:
+        return self._render(Stage.ANSWER, template_key, values)
+
+    def knowledge_answer(self, grounding: Grounding) -> Reply:
+        """Answer with an approved passage, or say plainly that there is nothing to answer from.
+
+        Having retrieved something is not the same as being grounded in it. A model sentence that
+        merely *accompanies* a passage can say anything at all, so this slice speaks the passage
+        itself. Model synthesis needs citation binding and a grounding evaluation, which are not
+        in this slice.
+        """
+        if not grounding.is_grounded:
+            return self._render_platform(
+                Stage.UNGROUNDED, "knowledge_unavailable", PLATFORM_KNOWLEDGE_UNAVAILABLE, {}
+            )
+        snippet = grounding.passages[0].snippet
+        if not _is_plain(snippet):
+            return self._render_platform(
+                Stage.UNGROUNDED, "knowledge_unavailable", PLATFORM_KNOWLEDGE_UNAVAILABLE, {}
+            )
+        title = grounding.passages[0].title or "Product documentation"
+        speech = f'According to {title}: "{snippet}"'
+        return Reply(speech, Stage.ANSWER, None, sources=grounding.sources)
+
+    # --- model-written speech ---
+
+    def from_model(self, speech: str, stage: Stage, fallback_key: str, **values: str) -> Reply:
+        """Consider a model-written sentence, and in this slice always replace it.
+
+        The rule is structural, not lexical, because no lexical rule survives contact with a model
+        that writes English. A sentence is only trustworthy if it can be tied to what actually
+        happened, and nothing in this slice can make that tie: an execution result proves one
+        operation, and a retrieved passage proves one document. So every reply is composed from
+        the product's templates, and this method records that the model's sentence was dropped.
+        """
+        if stage in MODEL_SPEECH_STAGES and _is_plain(speech) and len(speech) <= MAX_MODEL_SPEECH \
+                and not (stage is not Stage.EXECUTED and _claims_completion(speech)):
+            return Reply(speech.strip(), stage, None, from_model=True)
+        replaced = (
+            self._render_lifecycle(stage, fallback_key, values)
+            if stage in LIFECYCLE_STAGES
+            else self._render(stage, fallback_key, values)
+        )
+        return Reply(replaced.speech, stage, replaced.template_key, from_model=False,
+                     replaced_model_speech=True)
+
+    # --- rendering ---
+
+    def _render(self, stage: Stage, key: str, values: Mapping[str, str]) -> Reply:
+        allowed = STAGE_TEMPLATES.get(stage, frozenset())
+        if key not in allowed:
+            raise TemplateNotAllowed(f"{stage} may not be worded with {key}")
+        template = self._definition.responses.get(key)
+        if template is None:
+            raise MissingTemplate(key)
+        return Reply(self._fill(template, values), stage, key)
+
+    def _render_lifecycle(self, stage: Stage, key: str, values: Mapping[str, str]) -> Reply:
+        allowed = STAGE_TEMPLATES.get(stage, frozenset())
+        if key not in allowed:
+            raise TemplateNotAllowed(f"{stage} may not be worded with {key}")
+        if stage is Stage.FAILED:
+            return Reply(PLATFORM_FAILURE, stage, key)
+        template = PLATFORM_LIFECYCLE_TEMPLATES.get((stage, key))
+        if template is None:
+            raise TemplateNotAllowed(f"no platform lifecycle wording for {stage}:{key}")
+        return self._render_platform(stage, key, template, values)
+
+    def _render_platform(
+        self, stage: Stage, key: str, template: str, values: Mapping[str, str],
+    ) -> Reply:
+        return Reply(self._fill(template, values), stage, key)
+
+    def _fill(self, template: str, values: Mapping[str, str]) -> str:
+        supplied = {
+            "product": self._definition.identity.product_name,
+            "assistant": self._definition.identity.assistant_name,
+            **({"visitor": self._visitor} if self._visitor else {}),
+            **{name: str(value) for name, value in values.items() if value is not None},
+        }
+        missing = set(_PLACEHOLDER.findall(template)) - set(supplied)
+        if missing:
+            raise MissingTemplate(f"no value for {', '.join(sorted(missing))}")
+        return _PLACEHOLDER.sub(lambda match: supplied[match.group(1)], template).strip()
+
+    def _action_values(self, action: GenericAction, values: Mapping[str, str]) -> dict[str, str]:
+        described = dict(values)
+        described.setdefault("record_id", action.target.id if action.target else "")
+        described.setdefault("view", action.view or "")
+        if action.fields:
+            described.setdefault("changes", describe_changes(action.fields))
+        return {name: value for name, value in described.items() if value != "" or name in values}
+
+
+def describe_changes(fields: Mapping[str, object]) -> str:
+    """"status to Closed, owner to Ana Lopez" — the exact change, in the visitor's terms."""
+    return ", ".join(f"{name} to {value}" for name, value in sorted(fields.items()))
+
+
+def _claims_completion(speech: str) -> bool:
+    lowered = f" {speech.lower()} "
+    return any(f"{claim}" in lowered for claim in COMPLETION_CLAIMS)
+
+
+def _is_plain(speech: str) -> bool:
+    if not speech or not speech.strip():
+        return False
+    try:
+        check_text(speech)
+    except ValueError:
+        return False
+    return True

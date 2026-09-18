@@ -55,6 +55,13 @@ def engine_definition(version: int = 1) -> dict:
         "unknown_person": "I could not find {person} here.",
         "destructive_refused": "I can't delete anything here.",
         "fallback": "I can help with {product}.",
+        # Slice 4b: a full lifecycle needs wording for every stage, and they must read differently.
+        "greeting_named": "Hey {visitor}, welcome to {product}.",
+        "record_create_proposed": "I'll create a contact with {changes}.",
+        "record_created": "That contact is created with {changes}.",
+        "record_updated": "{record_id} is now updated: {changes}.",
+        "control_highlighted": "I'll point at that control in {view}.",
+        "knowledge_unavailable": "I have nothing to answer that from in this {product} demo, so I would rather not guess.",
     })
     return document
 
