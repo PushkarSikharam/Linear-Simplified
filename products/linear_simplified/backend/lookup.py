@@ -96,6 +96,30 @@ class LinearLegacyLookup:
         return len(self._records(entity))
 
 
+    # --- Snapshot source (3.2 plan, section 7.1) ---
+
+    @property
+    def scope_label(self) -> str:
+        return "all-workspaces" if self._scope_ids is None else ",".join(sorted(self._scope_ids))
+
+    def materialize(self, connection) -> Mapping[str, tuple[RecordView, ...]]:
+        """Read every visible record for one turn, inside the caller's read transaction.
+
+        One `load` call, so every entity in the snapshot comes from the same moment. The
+        connection is not kept: the snapshot holds records, never a database handle.
+        """
+        data = self._store.load(self._scope_ids, connection=connection)
+        materialized: dict[str, tuple[RecordView, ...]] = {}
+        for entity, source in ENTITY_SOURCES.items():
+            views = (self._view(entity, row) for row in data.get(source, []))
+            materialized[entity] = tuple(view for view in views if view is not None)
+        return materialized
+
+
 def lookup_for(grant: RecordGrant, store: ProductDataStore | None = None) -> LinearLegacyLookup:
     """Bind a lookup to exactly what this record grant may see."""
     return LinearLegacyLookup(store or ProductDataStore(), grant.visible_scope_ids())
+
+
+# What the engine needs in order to resolve people inside a snapshot of this product.
+PEOPLE_ENTITY = "member"

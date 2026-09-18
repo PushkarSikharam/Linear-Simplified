@@ -97,4 +97,4 @@ Demo path:
 
 The same path is available as suggested turns in the chat panel. Use Reset to start a clean reviewer session.
 
-The original architecture plan and implementation blueprint are historical planning documents. [SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) describes the current product behavior and remaining boundaries.
+[SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) describes the current product behavior and remaining boundaries. The original architecture plan and implementation blueprint that preceded it are no longer in the tree; they remain in git history.

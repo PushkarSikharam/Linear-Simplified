@@ -8,6 +8,8 @@ mapping, and anything it cannot express raises instead of guessing.
 from __future__ import annotations
 
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 import sys
 import tempfile
@@ -25,7 +27,13 @@ from app.engine.validator import ValidatedAction  # noqa: E402
 from app.record_access import RecordGrant  # noqa: E402
 from app.services import env as env_module  # noqa: E402
 from app.services.product_data_store import ProductDataStore  # noqa: E402
-from products.linear_simplified.backend.lookup import LinearLegacyLookup, lookup_for  # noqa: E402
+from app.engine.snapshot import SnapshotSource, TurnSnapshot, take_snapshot  # noqa: E402
+from products.linear_simplified.backend.lookup import (  # noqa: E402
+    PEOPLE_ENTITY,
+    PERSON_FIELDS,
+    LinearLegacyLookup,
+    lookup_for,
+)
 from products.linear_simplified.backend.package import PACKAGE  # noqa: E402
 from products.linear_simplified.backend.translator import (  # noqa: E402
     LEGACY_TYPES,
@@ -62,6 +70,13 @@ class ProductRecordFixture(unittest.TestCase):
 
     def admin_lookup(self) -> LinearLegacyLookup:
         return LinearLegacyLookup(self.store, None)
+
+    def snapshot(self, *scopes: str) -> TurnSnapshot:
+        source = LinearLegacyLookup(self.store, frozenset(scopes) if scopes else None)
+        return take_snapshot(
+            source, definition_checksum="test", people_entity=PEOPLE_ENTITY,
+            person_fields=PERSON_FIELDS,
+        )
 
 
 class LookupScopeTest(ProductRecordFixture):
@@ -146,6 +161,48 @@ class LookupScopeTest(ProductRecordFixture):
         })
         self.assertEqual(self.lookup(PRODUCT_ENG).count("issue"), before + 1)
         self.assertIsNone(self.lookup(PLATFORM).get("issue", "LIN-950"))
+
+
+class SnapshotSourceTest(ProductRecordFixture):
+    """The product reads a turn's records once, through the caller's transaction (plan 7.1)."""
+
+    def test_the_lookup_is_a_snapshot_source(self):
+        self.assertIsInstance(self.lookup(PRODUCT_ENG), SnapshotSource)
+
+    def test_a_snapshot_holds_only_the_callers_records(self):
+        snapshot = self.snapshot(PRODUCT_ENG)
+        self.assertEqual(snapshot.count("issue"), self.lookup(PRODUCT_ENG).count("issue"))
+        self.assertGreater(self.snapshot().count("issue"), snapshot.count("issue"))
+
+    def test_every_entity_comes_from_one_read(self):
+        """A record changed after the snapshot cannot change what the turn already answered."""
+        snapshot = self.snapshot(PRODUCT_ENG)
+        before = snapshot.get("issue", "LIN-142").title
+        self.store.update_issue("LIN-142", {**self.store.get_issue("LIN-142"), "title": "Changed"})
+        self.assertEqual(snapshot.get("issue", "LIN-142").title, before)
+        self.assertEqual(self.snapshot(PRODUCT_ENG).get("issue", "LIN-142").title, "Changed")
+
+    def test_the_snapshot_resolves_people_the_way_the_lookup_does(self):
+        snapshot = self.snapshot(PRODUCT_ENG)
+        self.assertEqual(snapshot.people("Maya Chen", 3).unique.id, "maya-chen")
+        self.assertEqual(snapshot.people("Sam Rivera", 3).matches, ())
+
+    def test_the_snapshot_records_the_scope_it_was_bound_to(self):
+        self.assertEqual(self.snapshot(PRODUCT_ENG).scope_label, PRODUCT_ENG)
+        self.assertEqual(self.snapshot().scope_label, "all-workspaces")
+
+    def test_the_product_reads_inside_the_snapshots_transaction(self):
+        """One moment for every entity, and the caller's transaction is required."""
+        with closing(sqlite3.connect(db.DB_PATH)) as connection:
+            connection.row_factory = sqlite3.Row
+            with self.assertRaises(RuntimeError):
+                take_snapshot(self.lookup(PRODUCT_ENG), definition_checksum="x",
+                              connection=connection)
+            connection.execute("begin")
+            snapshot = take_snapshot(self.lookup(PRODUCT_ENG), definition_checksum="x",
+                                     connection=connection)
+            self.assertGreater(snapshot.count("issue"), 0)
+            connection.rollback()
 
 
 class TranslatorTest(ProductRecordFixture):
