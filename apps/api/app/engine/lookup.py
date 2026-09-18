@@ -13,10 +13,17 @@ from typing import Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class RecordView:
+    """One record as the engine sees it. Deeply immutable: a turn cannot edit what it read."""
+
     entity: str
     id: str
     title: str
     fields: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        from app.engine.actions import frozen_value
+
+        object.__setattr__(self, "fields", frozen_value(self.fields))
 
 
 @dataclass(frozen=True)

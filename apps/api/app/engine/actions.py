@@ -164,16 +164,36 @@ def _declared_value_errors(action: GenericAction, spec: ActionSpec) -> list[str]
     return errors
 
 
+class ActionOrigin(StrEnum):
+    """Where an action came from. Carried with the proposal, never re-stated at a call site."""
+
+    DETERMINISTIC = "deterministic"  # the router decided it from the visitor's own words
+    MODEL = "model"  # a language model proposed it
+
+
 class ConfirmationReason(StrEnum):
     DEFINITION = "definition"
     CORRECTION = "correction"
+    MODEL_ORIGINATED = "model_originated"
 
 
-def confirmation_reason(spec: ActionSpec, *, target_from_correction: bool) -> ConfirmationReason | None:
-    """requires_confirmation = action.confirm OR correction_requires_confirmation (plan, 4.3)."""
+def confirmation_reason(
+    spec: ActionSpec, *, target_from_correction: bool,
+    origin: ActionOrigin = ActionOrigin.DETERMINISTIC,
+) -> ConfirmationReason | None:
+    """requires_confirmation = action.confirm OR correction OR model origin (plan, 4.3).
+
+    A definition author may lower friction on the deterministic path with `confirm: false`, but
+    that cannot waive confirmation for a mutation a model proposed: the visitor is shown the exact
+    target and change first. The model reason is checked before the definition's own flag so the
+    recorded reason says what actually made it necessary.
+    """
+    mutating = spec.capability in MUTATING_CAPABILITIES
+    if origin is ActionOrigin.MODEL and mutating:
+        return ConfirmationReason.MODEL_ORIGINATED
     if spec.confirm:
         return ConfirmationReason.DEFINITION
-    if target_from_correction and spec.capability in MUTATING_CAPABILITIES:
+    if target_from_correction and mutating:
         return ConfirmationReason.CORRECTION
     return None
 

@@ -140,9 +140,14 @@ SEED_CYCLES: tuple[dict[str, Any], ...] = (
 
 
 class ProductDataStore:
-    def load(self, scope_ids: frozenset[str] | None = None) -> dict[str, list[dict[str, Any]]]:
-        """Load records; with scope_ids, only records inside those workspaces."""
-        data = self._load_all()
+    def load(self, scope_ids: frozenset[str] | None = None,
+             connection=None) -> dict[str, list[dict[str, Any]]]:
+        """Load records; with scope_ids, only records inside those workspaces.
+
+        With `connection`, every table is read through the caller's open transaction, so one call
+        gives a single consistent view (used by the turn snapshot).
+        """
+        data = self._load_all(connection)
         return data if scope_ids is None else _filter_to_scopes(data, scope_ids)
 
     def workspace_scope(self, scope_id: str) -> WorkspaceScope | None:
@@ -184,9 +189,10 @@ class ProductDataStore:
         return {row["id"] for row in rows
                 if issue_project and issue_project in json.loads(row["allowed_issue_projects"])}
 
-    def _load_all(self) -> dict[str, list[dict[str, Any]]]:
-        self.seed_if_empty()
-        with get_connection() as connection:
+    def _load_all(self, connection=None) -> dict[str, list[dict[str, Any]]]:
+        if connection is None:
+            self.seed_if_empty()
+        with use_connection(connection) as connection:
             return {
                 "workspaceScopes": [
                     _scope_from_row(row)
