@@ -27,6 +27,7 @@ import {
   updateStoredIssue
 } from "@/lib/product-data-api";
 import { productConfig } from "@/lib/product-config";
+import { checkAgentService, type AgentServiceStatus } from "@/lib/service-health";
 import { useRecordSubmit, type CreateRecord } from "@/lib/use-record-submit";
 import { HybridVoiceEngine, VoiceEngineMode, VoiceEngineStatus } from "@/lib/hybrid-voice-engine";
 import type { SpectrumData } from "@/lib/voice-analyzer";
@@ -154,7 +155,7 @@ const demoPathPrompts = [
 ];
 
 const connectedIntegrationCount = integrations.filter((integration) => integration.connected).length;
-type TurnStatus = "Ready" | "Thinking" | "Interrupted" | "Action blocked";
+type TurnStatus = "Ready" | "Thinking" | "Interrupted" | "Action blocked" | "Service unavailable";
 const issueStatuses = ["Todo", "In progress", "Review", "Done"] as const;
 const priorities = ["Low", "Medium", "High"] as const;
 
@@ -177,6 +178,7 @@ export default function Home() {
   const [team, setTeam] = useState<DemoTeamMember[]>(demoTeam);
   const [workspaceScopes, setWorkspaceScopes] = useState<DemoWorkspaceScope[]>(demoWorkspaceScopes);
   const [workspaceScope, setWorkspaceScope] = useState<DemoWorkspaceScope>(demoWorkspaceScope);
+  const workspaceScopeRef = useRef<DemoWorkspaceScope>(demoWorkspaceScope);
   const [draftPrefill, setDraftPrefill] = useState<DraftPrefill>({});
   const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -206,6 +208,8 @@ export default function Home() {
   const latestEvent = uiEvents[0];
   const [dismissedEventId, setDismissedEventId] = useState<string | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [serviceError, setServiceError] = useState<string | null>(null);
+  const [agentServiceStatus, setAgentServiceStatus] = useState<AgentServiceStatus>("checking");
 
   useEffect(() => {
     if (!latestEvent) return;
@@ -214,29 +218,43 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [latestEvent]);
 
-  function loadStoredData(isCurrent: () => boolean = () => true) {
-    setDataError(null);
-    return ensureDemoLogin()
-      .then(() => loadDemoData())
-      .then((demoData) => {
-        if (!isCurrent()) return;
-        setIssues(demoData.issues);
-        setProjects(demoData.projects);
-        setCycles(demoData.cycles);
-        setTeam(demoData.team);
-        setWorkspaceScopes(demoData.workspaceScopes);
-        setWorkspaceScope((currentScope) => {
-          return demoData.workspaceScopes.find((scope) => scope.id === currentScope.id)
-            ?? demoData.workspaceScopes[0]
-            ?? demoWorkspaceScope;
-        });
-      })
-      .catch(() => {
-        if (!isCurrent()) return;
-        setDataError(
-          "Could not load saved workspace data. You are seeing sample data, and changes will not be saved until it loads."
-        );
+  async function loadStoredData(isCurrent: () => boolean = () => true) {
+    setServiceError(null);
+    setAgentServiceStatus("checking");
+    const isHealthy = await checkAgentService();
+    if (!isCurrent()) return;
+    if (!isHealthy) {
+      setAgentServiceStatus("unavailable");
+      setTurnStatus("Service unavailable");
+      setServiceError("Chat, voice, and saved changes are temporarily disabled.");
+      return;
+    }
+
+    try {
+      await ensureDemoLogin();
+      const demoData = await loadDemoData();
+      if (!isCurrent()) return;
+      setIssues(demoData.issues);
+      setProjects(demoData.projects);
+      setCycles(demoData.cycles);
+      setTeam(demoData.team);
+      setWorkspaceScopes(demoData.workspaceScopes);
+      setWorkspaceScope((currentScope) => {
+        const nextScope = demoData.workspaceScopes.find((scope) => scope.id === currentScope.id)
+          ?? demoData.workspaceScopes[0]
+          ?? demoWorkspaceScope;
+        workspaceScopeRef.current = nextScope;
+        return nextScope;
       });
+      setAgentServiceStatus("ready");
+      setTurnStatus("Ready");
+      setServiceError(null);
+    } catch {
+      if (!isCurrent()) return;
+      setAgentServiceStatus("unavailable");
+      setTurnStatus("Service unavailable");
+      setServiceError("The secure demo session could not start. Chat, voice, and saved changes are temporarily disabled.");
+    }
   }
 
   useEffect(() => {
@@ -256,6 +274,7 @@ export default function Home() {
       activeTurnIdRef.current = null;
     }
 
+    workspaceScopeRef.current = nextScope;
     setWorkspaceScope(nextScope);
     setDraftPrefill({});
     setIntentTrace({
@@ -365,7 +384,9 @@ export default function Home() {
         setCycles(demoData.cycles);
         setTeam(demoData.team);
         setWorkspaceScopes(demoData.workspaceScopes);
-        setWorkspaceScope(demoData.workspaceScopes[0] ?? demoWorkspaceScope);
+        const nextScope = demoData.workspaceScopes[0] ?? demoWorkspaceScope;
+        workspaceScopeRef.current = nextScope;
+        setWorkspaceScope(nextScope);
         setDraftPrefill({});
         setVisitorName(null);
         setIsSending(false);
@@ -475,6 +496,7 @@ export default function Home() {
     project = await saveStoredProject(project, workspaceScope.id, requestKey);
     setProjects((currentProjects) => [project, ...currentProjects]);
     const nextScope = addProjectToScope(workspaceScope, project);
+    workspaceScopeRef.current = nextScope;
     setWorkspaceScope(nextScope);
     setWorkspaceScopes((currentScopes) =>
       currentScopes.map((scope) => (scope.id === workspaceScope.id ? nextScope : scope))
@@ -517,7 +539,13 @@ export default function Home() {
 
   async function sendMessage(message: string, inputMode: InputMode = "text") {
     const trimmedMessage = message.trim();
-    if (!trimmedMessage) return null;
+    if (!trimmedMessage || agentServiceStatus !== "ready") return null;
+    if (!(await checkAgentService())) {
+      setAgentServiceStatus("unavailable");
+      setTurnStatus("Service unavailable");
+      setServiceError("The demo service disconnected. Reconnect before continuing.");
+      return null;
+    }
 
     const previousTurnId = activeTurnIdRef.current;
     if (previousTurnId !== null) {
@@ -567,7 +595,7 @@ export default function Home() {
         message: trimmedMessage,
         inputMode,
         currentPage,
-        workspaceScopeId: workspaceScope.id,
+        workspaceScopeId: workspaceScopeRef.current.id,
         selectedIssueId: uiState.selected_issue_id
       });
 
@@ -627,6 +655,19 @@ export default function Home() {
 
       // A failed record write reports why it failed; anything else is a transport failure.
       const saveMessage = error instanceof RecordSaveError ? error.message : null;
+      if (!saveMessage) {
+        setAgentServiceStatus("unavailable");
+        setTurnStatus("Service unavailable");
+        setServiceError("The demo service disconnected. Reconnect before continuing.");
+        recordUiEvent({
+          id: crypto.randomUUID(),
+          action_type: "AGENT_SERVICE",
+          status: "rejected",
+          description: "Edith lost the secure demo service connection.",
+          created_at: new Date().toISOString()
+        });
+        return null;
+      }
       setTurnStatus("Action blocked");
       setIntentTrace((currentTrace) => ({
         ...currentTrace,
@@ -638,14 +679,13 @@ export default function Home() {
         {
           speaker: "Agent",
           text: saveMessage
-            ?? "I could not reach the demo agent service. Please check that the backend is running."
         }
       ]);
       recordUiEvent({
         id: crypto.randomUUID(),
         action_type: "AGENT_SERVICE",
         status: "rejected",
-        description: "Edith could not reach the demo agent service.",
+        description: "Edith could not save the requested change.",
         created_at: new Date().toISOString()
       });
       return null;
@@ -1113,13 +1153,16 @@ function handleLocalDraftIntent(message: string): AgentTurnResponse | null {
           </button>
         ) : (
           <ConversationCard
+            agentServiceStatus={agentServiceStatus}
             demoPathPrompts={demoPathPrompts}
             demoPrompts={demoPrompts}
             isSending={isSending}
             messages={messages}
             onCollapse={() => setIsAssistantCollapsed(true)}
             onReset={resetDemoSession}
+            onRetryService={() => void loadStoredData()}
             onSend={sendMessage}
+            serviceError={serviceError}
             sessionId={sessionId}
             turnStatus={turnStatus}
           />
@@ -2873,23 +2916,29 @@ function DiagnosticsPanel({
 }
 
 function ConversationCard({
+  agentServiceStatus,
   demoPathPrompts,
   demoPrompts,
   isSending,
   messages,
   onCollapse,
   onReset,
+  onRetryService,
   onSend,
+  serviceError,
   sessionId,
   turnStatus
 }: {
+  agentServiceStatus: AgentServiceStatus;
   demoPathPrompts: string[];
   demoPrompts: string[];
   isSending: boolean;
   messages: TranscriptMessage[];
   onCollapse: () => void;
   onReset: () => void;
+  onRetryService: () => void;
   onSend: (message: string, inputMode?: InputMode) => Promise<AgentTurnResponse | null>;
+  serviceError: string | null;
   sessionId: string;
   turnStatus: TurnStatus;
 }) {
@@ -2912,6 +2961,7 @@ function ConversationCard({
   const isSubmittingVoiceRef = useRef(false);
   const isAgentSpeakingRef = useRef(false);
   const isVoiceActive = voiceEngineStatus !== "Idle" && voiceEngineStatus !== "Error";
+  const isServiceReady = agentServiceStatus === "ready";
 
   useEffect(() => {
     onSendRef.current = onSend;
@@ -3134,7 +3184,13 @@ function ConversationCard({
           >
             Hide
           </button>
-          <button className="reset-button" data-testid="reset-demo" onClick={onReset} type="button">
+          <button
+            className="reset-button"
+            data-testid="reset-demo"
+            disabled={!isServiceReady}
+            onClick={onReset}
+            type="button"
+          >
             Reset
           </button>
           <span
@@ -3157,6 +3213,22 @@ function ConversationCard({
           </span>
         </div>
       </div>
+
+      {!isServiceReady ? (
+        <div className="service-readiness" data-testid="service-readiness" role="status">
+          <strong>{agentServiceStatus === "checking" ? "Connecting" : "Service unavailable"}</strong>
+          <span>
+            {agentServiceStatus === "checking"
+              ? "Checking the secure demo service."
+              : serviceError ?? "Demo actions are paused until the service reconnects."}
+          </span>
+          {agentServiceStatus === "unavailable" ? (
+            <button className="secondary-button compact" onClick={onRetryService} type="button">
+              Retry
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="transcript" data-testid="transcript" ref={transcriptRef}>
         {messages.map((message, index) => (
@@ -3185,6 +3257,7 @@ function ConversationCard({
           {demoPathPrompts.map((prompt, index) => (
             <button
               data-testid={`demo-path-${index + 1}`}
+              disabled={!isServiceReady}
               key={prompt}
               onClick={() => {
                 setLiveTranscript("");
@@ -3209,6 +3282,7 @@ function ConversationCard({
         {demoPrompts.map((prompt) => (
           <button
             data-testid={`demo-prompt-${prompt.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+            disabled={!isServiceReady}
             key={prompt}
             onClick={() => {
               setLiveTranscript("");
@@ -3231,12 +3305,13 @@ function ConversationCard({
         <span className="input-mark" aria-hidden="true">P</span>
         <input
           data-testid="chat-input"
+          disabled={!isServiceReady}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Ask Edith"
+          placeholder={isServiceReady ? "Ask Edith" : "Demo service unavailable"}
           suppressHydrationWarning
           value={draft}
         />
-        <button data-testid="chat-send" disabled={!draft.trim()} type="submit">
+        <button data-testid="chat-send" disabled={!isServiceReady || !draft.trim()} type="submit">
           Send
         </button>
       </form>
@@ -3248,6 +3323,7 @@ function ConversationCard({
             aria-pressed={isVoiceActive}
             className={`voice-toggle-btn ${isVoiceActive ? "active" : ""}`}
             data-testid="voice-toggle"
+            disabled={!isServiceReady}
             onClick={toggleVoiceInput}
             type="button"
           >
@@ -3259,6 +3335,7 @@ function ConversationCard({
             aria-pressed={isTTSEnabled}
             className={`tts-toggle-btn ${isTTSEnabled ? "active" : ""}`}
             data-testid="tts-toggle"
+            disabled={!isServiceReady}
             onClick={() => {
               const nextState = !isTTSEnabled;
               setIsTTSEnabled(nextState);

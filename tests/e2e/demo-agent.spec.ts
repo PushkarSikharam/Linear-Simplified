@@ -16,6 +16,37 @@ import {
 } from "./harness";
 
 setupIsolatedApp();
+
+test("live readiness blocks partial demo behavior and recovers cleanly", async ({ page }) => {
+  let loginRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/agent/auth/demo-login") loginRequests += 1;
+  });
+  await page.route("**/api/agent/health", (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ status: "unavailable" })
+  }));
+
+  await page.goto("/");
+  await expect(page.getByTestId("service-readiness")).toContainText("Service unavailable");
+  await expect(page.getByTestId("chat-input")).toBeDisabled();
+  await expect(page.getByTestId("chat-send")).toBeDisabled();
+  await expect(page.getByTestId("voice-toggle")).toBeDisabled();
+  await expect(page.getByTestId("demo-path-1")).toBeDisabled();
+  expect(loginRequests, "an unhealthy service must not receive a login attempt").toBe(0);
+  await expect(page.getByTestId("transcript")).not.toContainText("backend is running");
+
+  await page.unroute("**/api/agent/health");
+  const dataLoaded = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/agent/demo-data" && response.ok()
+  );
+  await page.getByTestId("service-readiness").getByRole("button", { name: "Retry" }).click();
+  await dataLoaded;
+  await expect(page.getByTestId("service-readiness")).toBeHidden();
+  await expect(page.getByTestId("chat-input")).toBeEnabled();
+});
+
 test("phase 1 creates a ticket through the form with the selected owner", async ({ page }) => {
   await openApp(page);
   await page.getByTestId("nav-issues").click();
@@ -278,6 +309,10 @@ test("keeps Edith inside the selected workspace scope", async ({ page }) => {
 
 test("sends the selected workspace scope to the agent API", async ({ page }) => {
   let capturedWorkspaceScopeId = "";
+  let markTurnHandled!: () => void;
+  const turnHandled = new Promise<void>((resolve) => {
+    markTurnHandled = resolve;
+  });
 
   await page.route(agentTurnRoute, async (route) => {
     const body = route.request().postDataJSON();
@@ -286,11 +321,13 @@ test("sends the selected workspace scope to the agent API", async ({ page }) => 
       url: freshBackendUrl(route.request().url())
     });
     await route.fulfill({ response });
+    markTurnHandled();
   });
 
   await openApp(page);
   await page.getByTestId("workspace-switcher").selectOption("workspace-platform");
   await sendChat(page, "show sprint planning");
+  await turnHandled;
 
   expect(capturedWorkspaceScopeId).toBe("workspace-platform");
 });
@@ -907,14 +944,14 @@ test("cancels an active turn and ignores the delayed stale result", async ({ pag
   await expect(page.getByTestId("selected-issue-id")).toHaveText("LIN-142");
 });
 
-test("shows a graceful chat error when the agent API cannot be reached", async ({ page }) => {
+test("blocks further demo actions when the agent API disconnects", async ({ page }) => {
   await page.route(agentTurnRoute, (route) => route.abort());
   await openApp(page);
 
   await sendChat(page, "show sprint planning");
 
-  await expect(page.getByTestId("turn-status")).toHaveText("Action blocked");
-  await expect(page.getByTestId("transcript")).toContainText(
-    "I could not reach the demo agent service"
-  );
+  await expect(page.getByTestId("turn-status")).toHaveText("Service unavailable");
+  await expect(page.getByTestId("service-readiness")).toContainText("disconnected");
+  await expect(page.getByTestId("chat-input")).toBeDisabled();
+  await expect(page.getByTestId("transcript")).not.toContainText("backend is running");
 });

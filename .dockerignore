@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+.venv
+node_modules
+apps/web/.next
+apps/api/data
+playwright-report
+test-results
+tmp
+*.sqlite3
+*.pyc
+*.exe
+.env
+.env.*
+!.env.example
