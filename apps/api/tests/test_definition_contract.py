@@ -135,9 +135,16 @@ class DefinitionContractTest(unittest.TestCase):
         document = sample_definition()
         document["responses"]["run_shell"] = "Hello."
         self.assert_rejected(document, "unknown response key")
+        # A referenced choice question is product copy, so the product must supply it.
+        document = sample_definition()
+        del document["responses"]["clarify_create"]
+        self.assert_rejected(document, "referenced but not defined")
+
+    def test_platform_owned_replies_need_no_product_wording(self):
+        """The guardrail refusal is platform wording (the 4b response boundary)."""
         document = sample_definition()
         del document["responses"]["out_of_scope"]
-        self.assert_rejected(document, "referenced but not defined")
+        self.assertNotIn("out_of_scope", self.load(document).definition.responses)
 
     # --- Structure ---
 

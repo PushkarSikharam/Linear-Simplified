@@ -105,7 +105,8 @@ class PhaseOneGapTest(unittest.TestCase):
     # --- Milestone 1: defects reproduced after Phase 1 ---
 
     def test_m1_demo_login_requires_explicit_synthetic_demo_flag(self):
-        body = {"user_id": "demo-admin"}
+        # A non-administrator: whether an administrator may use the demo is a separate rule.
+        body = {"user_id": "demo-product-eng"}
         with patch.object(env_module, "_env_files", lambda: ()), patch.dict(os.environ):
             os.environ.pop("PIXEL_SYNTHETIC_DEMO", None)
             self.assertEqual(self.client.post("/api/auth/demo-login", json=body).status_code, 403)

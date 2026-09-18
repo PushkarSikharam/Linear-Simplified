@@ -50,9 +50,39 @@ class AuthUser:
 
 
 def demo_login_enabled() -> bool:
-    """Passwordless demo login, including the admin identity, is only for deployments
-    explicitly marked as isolated synthetic demos. It is never customer access."""
+    """Passwordless demo login is only for deployments explicitly marked as isolated synthetic
+    demos. It is never customer access."""
     return env_bool("PIXEL_SYNTHETIC_DEMO", default=False)
+
+
+def demo_identity_allowed(user_id: str, tenant_id: str) -> bool:
+    """Whether the public demo login may sign this identity in.
+
+    The rule is structural: the public demo never hands out an administrator's token. Anyone can
+    call the demo login with any user ID, so a restriction that lived in the web app (which user
+    it happens to send) would restrict nothing. An administrator here means an organization admin,
+    or a member holding administration over the product's records (who can reset everyone's data).
+
+    `PIXEL_DEMO_ADMIN_LOGIN=true` lifts the administrator rule. It exists only for isolated test
+    harnesses that start their own backend and database; it defaults off and a deployment must
+    never set it. `PIXEL_DEMO_LOGIN_USERS`, when set, narrows the demo further to a fixed list.
+    """
+    listed = env_value("PIXEL_DEMO_LOGIN_USERS")
+    if listed:
+        allowed = {name.strip() for name in listed.split(",") if name.strip()}
+        if user_id not in allowed:
+            return False
+    if env_bool("PIXEL_DEMO_ADMIN_LOGIN", default=False):
+        return True
+    membership = OrganizationDirectory().membership(tenant_id, user_id)
+    if membership is None or membership.role == "org_admin":
+        return False
+    owner = legacy_record_owner()
+    if owner is not None and owner.tenant_id == tenant_id:
+        grant = record_grant(tenant_id, owner.product_id, user_id)
+        if grant is not None and grant.is_admin:
+            return False
+    return True
 
 
 def create_token(user_id: str, tenant_id: str | None = None) -> str:

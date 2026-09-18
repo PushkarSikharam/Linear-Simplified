@@ -192,6 +192,22 @@ class OrganizationDirectory:
             ).fetchone()
         if row is None:
             return None
+        return self._binding(row)
+
+    def active_products(self) -> list[ProductBinding]:
+        """Every active product binding in this deployment, across organizations.
+
+        Used by platform health, never by a request: nothing tenant-facing may list another
+        organization's products.
+        """
+        with use_connection(self._connection) as connection:
+            rows = connection.execute(
+                "select * from product_bindings where state = 'active' order by tenant_id, product_id"
+            ).fetchall()
+        return [self._binding(row) for row in rows]
+
+    @staticmethod
+    def _binding(row) -> ProductBinding:
         return ProductBinding(
             tenant_id=row["tenant_id"],
             product_id=row["product_id"],

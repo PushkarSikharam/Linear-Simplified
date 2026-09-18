@@ -41,6 +41,8 @@ export default defineConfig({
             PIXEL_SYNTHETIC_DEMO: "true",
             PIXEL_DEMO_SEEDS: "true",
             PIXEL_DEPLOYMENT_ID: "measurement",
+            // Measurement harness only: the ledger summary is read as the administrator.
+            PIXEL_DEMO_ADMIN_LOGIN: "true",
             // Authoritative server-side ceiling across every provider attempt in this run.
             PIXEL_TOTAL_ATTEMPT_CAP: ceiling,
             PIXEL_PAID_PROVIDERS_ENABLED: paid ? "true" : "false",
@@ -57,6 +59,7 @@ export default defineConfig({
             ...process.env,
             PIXEL_TEST_BUILD: "1",
             NEXT_PUBLIC_API_BASE_URL: "/api/agent",
+            NEXT_PUBLIC_PIXEL_DEMO_USER: "demo-visitor",
             PIXEL_AGENT_API_BASE_URL: `http://127.0.0.1:${apiPort}/api`
           }
         }

@@ -68,10 +68,13 @@ jobs:
             docker logs pixel-api-ci
             exit 1
           fi
-          curl --fail --silent \
-            --header 'Content-Type: application/json' \
-            --data '{"user_id":"demo-admin"}' \
-            http://127.0.0.1:8011/api/auth/demo-login > /dev/null
+          # The same checks as the live smoke test: a conversation starts and a real request is
+          # answered, the guardrail refuses for its own reason, the administrator cannot sign in,
+          # and a visitor cannot reset shared data. Rate limits stay armed, as in production.
+          if ! PIXEL_SMOKE_API_URL=http://127.0.0.1:8011/api node scripts/smoke-live.mjs; then
+            docker logs pixel-api-ci
+            exit 1
+          fi
           docker rm --force pixel-api-ci
 
   web:

@@ -46,10 +46,27 @@ RESPONSE_KEYS = frozenset({
     "record_create_proposed", "record_update_proposed", "confirm_action", "action_cancelled",
     # Added in 3.2: the question asked when a request names more than one visible person.
     "clarify_person",
-    # Added in 3.2 slice 4b: what to say when no knowledge source can answer a question. The
-    # platform decides *when* this is used; the product still owns the words.
+    # Added in 3.2 slice 4b: what to say when no knowledge source can answer a question.
     "knowledge_unavailable",
 })
+
+# Who owns the words of each reply (3.2 slice 4b, response-integrity boundary).
+#
+# The platform owns every sentence that asserts something: execution, refusal, authorization,
+# scope, counts, retrieved facts, history, failure and knowledge availability. A product owns only
+# its identity copy, and the choice questions it asks to tell its own requests apart. Product
+# copy is checked when a definition is validated (`copy_rules`) and can use names, never facts.
+#
+# Slot questions (which person, which record) are the platform's: their answer feeds straight into
+# an action, so their wording must not promise an outcome the platform may still refuse.
+PRODUCT_IDENTITY_KEYS = frozenset({"greeting", "greeting_named", "identity"})
+PRODUCT_CHOICE_KEYS = frozenset({"clarify_create", "clarify_all_items"})
+PRODUCT_VOICE_KEYS = PRODUCT_IDENTITY_KEYS | PRODUCT_CHOICE_KEYS
+# A definition may still declare these (definitions published before this boundary do); nothing
+# speaks them.
+PLATFORM_RESPONSE_KEYS = RESPONSE_KEYS - PRODUCT_VOICE_KEYS
+# Placeholders product copy may use: names supplied by the platform, never facts.
+PRODUCT_COPY_PLACEHOLDERS = frozenset({"product", "assistant", "visitor"})
 
 # Whole-message replies that confirm a pending action. Anything else cancels it.
 AFFIRMATIONS = frozenset({"yes", "yes please", "confirm", "go ahead", "do it"})

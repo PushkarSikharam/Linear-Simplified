@@ -76,7 +76,12 @@ export function setupIsolatedApp() {
           PIXEL_BLOCK_EXTERNAL_HTTP: "true",
           // Behave identically on developer machines and CI: no local .env files or keys.
           PIXEL_IGNORE_ENV_FILES: "true",
-          LLM_ENABLED: "false"
+          LLM_ENABLED: "false",
+          // Test harness only: lets the harness sign in as the record administrator to reset
+          // data between tests. The browser still signs in as the public demo visitor.
+          PIXEL_DEMO_ADMIN_LOGIN: "true",
+          // Every test runs from one address against one identity; limits are covered by API tests.
+          PIXEL_RATE_LIMITS: "off"
         },
         stdio: "ignore",
         windowsHide: true
@@ -86,12 +91,14 @@ export function setupIsolatedApp() {
     apiProcess.unref();
     await waitForApi();
 
-    // Obtain an admin token for test-harness calls (reset, direct data reads).
+    // Obtain an admin token for test-harness calls (reset, direct data reads). This works only
+    // because PIXEL_DEMO_ADMIN_LOGIN is set above; production refuses it.
     const loginResponse = await fetch(`http://127.0.0.1:${apiPort}/api/auth/demo-login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: "demo-admin" })
     });
+    expect(loginResponse.ok, "Harness admin login was refused").toBe(true);
     const loginBody = (await loginResponse.json()) as { token: string };
     apiToken = loginBody.token;
   });
@@ -194,8 +201,9 @@ async function waitForApi() {
       const response = await fetch(`http://127.0.0.1:${apiPort}/health`);
       if (response.ok) return;
     } catch {
-      await delay(500);
+      // Not listening yet.
     }
+    await delay(500);
   }
 
   throw new Error(`Timed out waiting for E2E API server on port ${apiPort}.`);
