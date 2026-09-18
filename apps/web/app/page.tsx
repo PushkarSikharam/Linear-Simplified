@@ -207,6 +207,13 @@ export default function Home() {
   const [dismissedEventId, setDismissedEventId] = useState<string | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!latestEvent) return;
+    setDismissedEventId(null);
+    const timeout = window.setTimeout(() => setDismissedEventId(latestEvent.id), 3200);
+    return () => window.clearTimeout(timeout);
+  }, [latestEvent]);
+
   function loadStoredData(isCurrent: () => boolean = () => true) {
     setDataError(null);
     return ensureDemoLogin()

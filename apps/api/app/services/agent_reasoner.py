@@ -94,7 +94,7 @@ class AgentReasoner:
         if not self.enabled() or not api_key:
             return None
 
-        timeout_ms = env_int("LLM_TIMEOUT_MS", 15000)
+        timeout_ms = env_int("LLM_TIMEOUT_MS", 6000)
         tenant = context.owner
         limits = reasoning_token_limits(tenant)
         payload = self._payload(context, limits)

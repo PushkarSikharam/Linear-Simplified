@@ -12,7 +12,7 @@ from app.services import http_client
 from app.services.env import env_value
 from app.tenancy import ProductContext
 
-PROVIDER_TIMEOUT_SECONDS = 10.0
+PROVIDER_TIMEOUT_SECONDS = 4.0
 
 
 @dataclass(frozen=True)
@@ -52,8 +52,8 @@ def configured_speech_providers(owner: ProductContext, voice_style: str) -> list
         providers.append(AzureSpeech(
             key=azure_key,
             region=azure_region,
-            voice=env_value("AZURE_SPEECH_VOICE_NAME") or "en-US-Ava:DragonHDLatestNeural",
-            output_format=env_value("AZURE_SPEECH_OUTPUT_FORMAT") or "audio-48khz-192kbitrate-mono-mp3",
+            voice=env_value("AZURE_SPEECH_VOICE_NAME") or "en-US-AvaMultilingualNeural",
+            output_format=env_value("AZURE_SPEECH_OUTPUT_FORMAT") or "audio-24khz-48kbitrate-mono-mp3",
         ))
     if gemini_key := env_value("GEMINI_API_KEY"):
         providers.append(GeminiSpeech(key=gemini_key, style=voice_style))
