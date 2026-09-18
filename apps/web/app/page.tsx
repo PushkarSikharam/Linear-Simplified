@@ -178,6 +178,7 @@ export default function Home() {
   const [team, setTeam] = useState<DemoTeamMember[]>(demoTeam);
   const [workspaceScopes, setWorkspaceScopes] = useState<DemoWorkspaceScope[]>(demoWorkspaceScopes);
   const [workspaceScope, setWorkspaceScope] = useState<DemoWorkspaceScope>(demoWorkspaceScope);
+  const workspaceScopeRef = useRef<DemoWorkspaceScope>(demoWorkspaceScope);
   const [draftPrefill, setDraftPrefill] = useState<DraftPrefill>({});
   const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -239,9 +240,11 @@ export default function Home() {
       setTeam(demoData.team);
       setWorkspaceScopes(demoData.workspaceScopes);
       setWorkspaceScope((currentScope) => {
-        return demoData.workspaceScopes.find((scope) => scope.id === currentScope.id)
+        const nextScope = demoData.workspaceScopes.find((scope) => scope.id === currentScope.id)
           ?? demoData.workspaceScopes[0]
           ?? demoWorkspaceScope;
+        workspaceScopeRef.current = nextScope;
+        return nextScope;
       });
       setAgentServiceStatus("ready");
       setTurnStatus("Ready");
@@ -271,6 +274,7 @@ export default function Home() {
       activeTurnIdRef.current = null;
     }
 
+    workspaceScopeRef.current = nextScope;
     setWorkspaceScope(nextScope);
     setDraftPrefill({});
     setIntentTrace({
@@ -380,7 +384,9 @@ export default function Home() {
         setCycles(demoData.cycles);
         setTeam(demoData.team);
         setWorkspaceScopes(demoData.workspaceScopes);
-        setWorkspaceScope(demoData.workspaceScopes[0] ?? demoWorkspaceScope);
+        const nextScope = demoData.workspaceScopes[0] ?? demoWorkspaceScope;
+        workspaceScopeRef.current = nextScope;
+        setWorkspaceScope(nextScope);
         setDraftPrefill({});
         setVisitorName(null);
         setIsSending(false);
@@ -490,6 +496,7 @@ export default function Home() {
     project = await saveStoredProject(project, workspaceScope.id, requestKey);
     setProjects((currentProjects) => [project, ...currentProjects]);
     const nextScope = addProjectToScope(workspaceScope, project);
+    workspaceScopeRef.current = nextScope;
     setWorkspaceScope(nextScope);
     setWorkspaceScopes((currentScopes) =>
       currentScopes.map((scope) => (scope.id === workspaceScope.id ? nextScope : scope))
@@ -588,7 +595,7 @@ export default function Home() {
         message: trimmedMessage,
         inputMode,
         currentPage,
-        workspaceScopeId: workspaceScope.id,
+        workspaceScopeId: workspaceScopeRef.current.id,
         selectedIssueId: uiState.selected_issue_id
       });
 

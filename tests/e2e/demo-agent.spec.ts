@@ -309,6 +309,10 @@ test("keeps Edith inside the selected workspace scope", async ({ page }) => {
 
 test("sends the selected workspace scope to the agent API", async ({ page }) => {
   let capturedWorkspaceScopeId = "";
+  let markTurnHandled!: () => void;
+  const turnHandled = new Promise<void>((resolve) => {
+    markTurnHandled = resolve;
+  });
 
   await page.route(agentTurnRoute, async (route) => {
     const body = route.request().postDataJSON();
@@ -317,11 +321,13 @@ test("sends the selected workspace scope to the agent API", async ({ page }) => 
       url: freshBackendUrl(route.request().url())
     });
     await route.fulfill({ response });
+    markTurnHandled();
   });
 
   await openApp(page);
   await page.getByTestId("workspace-switcher").selectOption("workspace-platform");
   await sendChat(page, "show sprint planning");
+  await turnHandled;
 
   expect(capturedWorkspaceScopeId).toBe("workspace-platform");
 });
