@@ -18,8 +18,8 @@ import {
 import {
   ensureDemoLogin,
   loadDemoData,
+  RateLimitedError,
   RecordSaveError,
-  resetStoredDemoData,
   saveStoredCycle,
   saveStoredIssue,
   saveStoredProject,
@@ -249,11 +249,13 @@ export default function Home() {
       setAgentServiceStatus("ready");
       setTurnStatus("Ready");
       setServiceError(null);
-    } catch {
+    } catch (error) {
       if (!isCurrent()) return;
       setAgentServiceStatus("unavailable");
       setTurnStatus("Service unavailable");
-      setServiceError("The secure demo session could not start. Chat, voice, and saved changes are temporarily disabled.");
+      setServiceError(error instanceof RateLimitedError
+        ? "Too many visitors are starting sessions right now. Please wait a moment, then reconnect."
+        : "The secure demo session could not start. Chat, voice, and saved changes are temporarily disabled.");
     }
   }
 
@@ -360,8 +362,10 @@ export default function Home() {
 
   function resetDemoSession() {
     setDataError(null);
-    // Clear nothing until the server confirms the reset; a failed reset keeps the session as it was.
-    void resetStoredDemoData()
+    // Reset starts a fresh conversation for this visitor over the current saved data. It never
+    // resets everyone's demo data: that is shared, and only an operator may restore it.
+    // Clear nothing until the data has reloaded; a failed reset keeps the session as it was.
+    void loadDemoData()
       .then((demoData) => {
         const activeTurnId = activeTurnIdRef.current;
         if (activeTurnId !== null) {
@@ -393,7 +397,7 @@ export default function Home() {
         setTurnStatus("Ready");
       })
       .catch(() => {
-        setDataError("Reset failed. Nothing was changed: your current session and saved data are unchanged.");
+        setDataError("Reset failed. Nothing was changed: your current session is unchanged.");
       });
   }
 
@@ -650,6 +654,23 @@ export default function Home() {
       return result;
     } catch (error) {
       if (activeTurnIdRef.current !== turnId) {
+        return null;
+      }
+
+      // Too many requests: the service is fine and nothing ran, so say so and stay connected.
+      if (error instanceof RateLimitedError) {
+        setTurnStatus("Ready");
+        setMessages((currentMessages) => [
+          ...currentMessages,
+          { speaker: "Agent", text: error.message }
+        ]);
+        recordUiEvent({
+          id: crypto.randomUUID(),
+          action_type: "AGENT_SERVICE",
+          status: "rejected",
+          description: "Edith paused because requests arrived too quickly. Nothing was changed.",
+          created_at: new Date().toISOString()
+        });
         return null;
       }
 

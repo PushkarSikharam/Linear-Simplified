@@ -31,6 +31,9 @@ export default defineConfig({
         ...process.env,
         PIXEL_TEST_BUILD: "1",
         NEXT_PUBLIC_API_BASE_URL: "/api/agent",
+        // The browser signs in exactly as a public visitor does in production, whatever a
+        // developer's local environment files say.
+        NEXT_PUBLIC_PIXEL_DEMO_USER: "demo-visitor",
         // Never let the test server fall through to the development backend.
         PIXEL_AGENT_API_BASE_URL: `http://127.0.0.1:${E2E_SENTINEL_PORT}/api`
       },

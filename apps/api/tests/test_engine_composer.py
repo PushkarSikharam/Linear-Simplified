@@ -17,6 +17,7 @@ from app.engine.actions import FilterParam, GenericAction, RecordRef
 from app.engine.composer import (
     COMPLETION_CLAIMS,
     MAX_MODEL_SPEECH,
+    PLATFORM_KNOWLEDGE_UNAVAILABLE,
     STAGE_TEMPLATES,
     TemplateNotAllowed,
     MissingTemplate,
@@ -309,21 +310,35 @@ class OfferableActionTest(unittest.TestCase):
 
 
 class KnowledgeFallbackTest(unittest.TestCase):
-    def test_with_no_knowledge_source_the_assistant_says_so_in_the_products_words(self):
+    """Knowledge availability is asserted by the platform (the reopened 4b boundary).
+
+    Slice 4b first let the product word this reply. The stakeholder review reversed that: whether
+    approved knowledge exists is a platform fact, so the product contributes only its name.
+    """
+
+    def test_with_no_knowledge_source_the_assistant_says_so_in_platform_words(self):
         definition = load_engine_definition(document=engine_definition())
         reply = ResponseComposer(definition).answer(KNOWLEDGE_UNAVAILABLE_KEY)
         self.assertEqual(reply.template_key, KNOWLEDGE_UNAVAILABLE_KEY)
-        self.assertIn(definition.identity.product_name, reply.speech)
+        self.assertFalse(reply.product_copy)
+        self.assertEqual(reply.speech, PLATFORM_KNOWLEDGE_UNAVAILABLE.format(
+            product=definition.identity.product_name))
         for invented in ("probably", "i think", "maybe", "as far as i know"):
             self.assertNotIn(invented, reply.speech.lower())
 
-    def test_core_does_not_author_the_fallback_wording(self):
-        """Core decides when to say it; a product that declares nothing gets an error, not prose."""
-        document = engine_definition()
-        document["responses"].pop(KNOWLEDGE_UNAVAILABLE_KEY)
-        composer = ResponseComposer(load_engine_definition(document=document))
-        with self.assertRaises(MissingTemplate):
-            composer.answer(KNOWLEDGE_UNAVAILABLE_KEY)
+    def test_the_product_cannot_reword_knowledge_availability(self):
+        """Declared, reworded or absent: the product's text for this key is never spoken."""
+        for wording in (None, "Our docs cover everything; ask me anything about {product}."):
+            with self.subTest(wording=wording):
+                document = engine_definition()
+                if wording is None:
+                    document["responses"].pop(KNOWLEDGE_UNAVAILABLE_KEY)
+                else:
+                    document["responses"][KNOWLEDGE_UNAVAILABLE_KEY] = wording
+                reply = ResponseComposer(load_engine_definition(document=document)).answer(
+                    KNOWLEDGE_UNAVAILABLE_KEY)
+                self.assertEqual(reply.speech, "I don't have approved Sample Desk information to "
+                                               "answer that, so I won't guess.")
 
 
 class NoRuntimeWiringTest(unittest.TestCase):

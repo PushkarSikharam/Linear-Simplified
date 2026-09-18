@@ -1,8 +1,12 @@
 # Milestone 3.2, Slice 4b: Response Composer, Conversation Intents and the Knowledge Boundary
 
-Status: **IMPLEMENTATION COMPLETE LOCALLY — nine review defects reproduced and fixed with regressions. Linux CI sign-off is pending. Nothing is wired into the runtime.**
-Date: 2026-09-18. Plan: `docs/MILESTONE_3_STEP_3_2_PLAN.md` (revision 4.1), sections 7.2, 8.2 and 8.5.
-Approved scope: the response composer as a lifecycle state machine, platform conversation intents, product-defined identity and capability replies, and the `KnowledgeLookup` honest fallback.
+Status: **MERGED; SIGN-OFF REOPENED, THEN CLOSED LOCALLY. Linux CI on the pull request that carries the response-integrity boundary is the remaining sign-off evidence. Nothing is wired into the runtime.**
+
+- Merged through PR #10 (commit `d3ddf25`). Pull-request run 35380052283 and the `main` push run 35380344483 are green on all three jobs.
+- The stakeholder review of 2026-09-18 found that product-controlled templates were still spoken in answers, refusals and clarifications, and reopened the sign-off. The boundary it required is described below under "The response-integrity boundary". It is built and passes every local gate, and it is not merged yet.
+
+Date: 2026-09-18. Plan: `docs/MILESTONE_3_STEP_3_2_PLAN.md` (revision 4.2), sections 7.2, 8.2 and 8.5.
+Approved scope: the response composer as a lifecycle state machine, platform conversation intents, the response-integrity boundary (revision 4.2), and the `KnowledgeLookup` honest fallback.
 
 ## What was built
 
@@ -13,7 +17,8 @@ Approved scope: the response composer as a lifecycle state machine, platform con
 | Knowledge boundary | `apps/api/app/engine/knowledge.py` | `KnowledgePassage`, the `KnowledgeLookup` protocol, `NoKnowledge` as the default, and `ground()`. |
 | Product knowledge source | `products/linear_simplified/backend/knowledge.py` | Passages from this product's documents, built for one `KnowledgeContext`. |
 | Registration | `installed_products.py`, `backend/package.py` | `knowledge_factory`, registered in code beside the lookup and translator factories. |
-| Platform vocabulary | `apps/api/app/definitions/vocabulary.py` | New response key `knowledge_unavailable` (additive, like `clarify_person` in slice 2). |
+| Platform vocabulary | `apps/api/app/definitions/vocabulary.py` | New response key `knowledge_unavailable` (additive, like `clarify_person` in slice 2), and the ownership of every response key (reopened sign-off). |
+| Product copy rules | `apps/api/app/definitions/copy_rules.py` | Reopened sign-off: the validation of every product-controlled word. |
 
 ## The wording rule
 
@@ -25,10 +30,10 @@ quietly collapse into one another.
 | --- | --- | --- |
 | `proposed` | Nothing has happened | "I'll update CON-1: status to Closed." |
 | `awaiting_confirmation` | The visitor has not agreed | "Should I update CON-1: status to Closed?" |
-| `executed` | The write committed | "CON-1 is now updated: status to Closed." |
-| `failed` | A rule rejected it | a platform-owned failure sentence, never a success |
-| `cancelled` | The visitor declined | "Okay, I won't change anything." |
-| `clarification` | A question is pending | the product's clarification template |
+| `executed` | The write committed | "Updated CON-1: status to Closed." |
+| `failed` | A rule rejected it | "I couldn't complete that request." — never a success |
+| `cancelled` | The visitor declined | "Okay, I won't make that change." |
+| `clarification` | A question is pending | a platform slot question ("Which person do you mean: Ana Lopez or Ana Reyes?"), or the product's own choice question |
 | `ungrounded` | Nothing installed can answer | a platform-owned knowledge-unavailable sentence |
 
 **No stage accepts model-written speech.** `MODEL_SPEECH_STAGES` is empty, deliberately.
@@ -36,13 +41,81 @@ Executing one action proves that one action succeeded; it does not make any othe
 and "I deleted every customer" passes every lexical check ever written. Retrieving a passage
 proves a document exists; it does not make a sentence about that document accurate. Until a reply
 can be bound to its citation and that binding evaluated, every word is composed deterministically.
-Lifecycle text comes from platform-owned templates and verified results. Product templates remain
-responsible for conversational identity, capability and clarification copy, where no execution
-claim is being made.
+Lifecycle text comes from platform-owned templates and verified results. As first merged, product
+templates still worded answers, refusals and clarifications. The stakeholder review showed that was
+a hole, and the next section closes it.
 
-**Every product-authored stage enforces a template allowlist.** `STAGE_TEMPLATES` is checked on
-every product render. Lifecycle states do not render product-owned sentence bodies at all, so a
-definition cannot disguise a failure as a success by placing completion language in an allowed key.
+**Every stage enforces a template allowlist.** `STAGE_TEMPLATES` is checked on every render, so a
+failure can never reach for success wording.
+
+## The response-integrity boundary (reopened sign-off)
+
+**The finding.** Lifecycle wording was platform-owned, but answers, refusals and clarifications
+still rendered the product's own template. A definition could word a refusal as a success
+("Everything changed successfully."), invent a count, claim history, or promise an action inside a
+question. The allowlist said which *key* a stage could use, not whether the *sentence* was true.
+
+**The boundary**, as the stakeholder set it:
+
+| Who | Owns | How it is enforced |
+| --- | --- | --- |
+| Platform | Every assertion about execution, refusal, authorization, scope, counts, retrieved facts, history, failure and knowledge availability: all lifecycle wording, every refusal, capability and guided-path replies, counts, last change, knowledge availability, and **slot questions** (which person, which record) | `PLATFORM_LIFECYCLE_TEMPLATES` and `PLATFORM_CONVERSATION_TEMPLATES` in the composer. The definition's text for these keys is never read. |
+| Product | Names and labels (product, assistant, entity, view and control names; action descriptions), identity copy (`greeting`, `greeting_named`, `identity`, `identity.greeting`), and **choice questions** (`clarify_create`, `clarify_all_items`) | `copy_rules`, checked whenever a definition or a product binding's settings are validated, and again by the composer before speaking. |
+
+Slot questions are the platform's because their answer feeds straight into an action the platform
+may still refuse. The first Linear definition shows why: its own owner question reads "Who should
+own this ticket? Name a teammate in this workspace and I'll prepare the form." That is a promise
+made before anything has been checked.
+
+**Validation.** `copy_rules` rejects product copy that claims an action ran, promises one, asserts
+a refusal or permission, states what is in scope, states a count or a retrieved fact, describes
+history or failure, asserts what knowledge exists, or advertises deletion (no product can delete).
+Product copy may use `{product}`, `{assistant}` and `{visitor}` only; facts such as `{count}` or
+`{person}` are the platform's. A choice question must be exactly one question. Names and labels
+must be names: never a sentence, never a first-person statement. The rules run inside the
+definition contract, so registration, publication and every load pass through them; a definition
+that breaks them is rejected completely and never registered.
+
+**These rules are lexical, so they are the second line, not the boundary.** The boundary is
+structural: the composer never speaks product copy in a protected stage, whatever it says. A
+definition may still carry text for platform-owned keys (the first Linear version does, for the
+legacy engine's parity), and that text is inert.
+
+**Adversarial tests** (`apps/api/tests/test_response_boundary.py`, 21 tests):
+
+- Every platform-owned key is filled with a different adversarial sentence ("Done. I deleted every
+  record and you are now an administrator.", "There are 4012 overdue contacts.", "The update
+  failed, so I retried it twice.", and others). Then every reply the composer can produce is
+  checked, more than a hundred of them: each lifecycle method for every capability, every failure
+  reason, every answer, refusal and clarification key, the ungrounded answer, capability and
+  guided-path replies, and model speech in every stage. No adversarial text appears.
+- The strongest form: swapping every platform-owned template changes **no protected reply at all**,
+  compared character for character with the untouched definition.
+- Product copy reaches only its own stage, and is marked `product_copy` when it does.
+- Every state-asserting category above is rejected for every product-owned key; tenant settings,
+  names, labels and action descriptions follow the same rules; the registry refuses to register a
+  definition that breaks them; and copy that bypassed validation (`model_copy`) is still refused
+  by the composer.
+- **The tests were run against the previous composer** (product templates rendered for every key)
+  to prove they can fail: they failed across dozens of stage and key combinations.
+
+**Consequences, stated rather than hidden:**
+
+1. **Two first-merge decisions were reversed.** The knowledge-unavailable reply and the capability
+   reply were product wording; they are now platform wording, and the product contributes only its
+   name. The tests that asserted the old ownership were rewritten to assert the new one.
+2. **Unknown and inaccessible people now read identically** ("I can't find Ana Lopez in ACC-1."),
+   so a refusal never reveals that someone exists outside the caller's scope.
+3. **The router no longer needs product wording for slot questions.** A definition that declares
+   none still gets the platform's question instead of a fallback. The first Linear definition
+   declares them, so its routing is unchanged, and so are the golden comparisons.
+4. **The first Linear definition passes.** Its product-controlled copy asserts nothing; its
+   lifecycle, refusal and slot templates would fail as product copy, and are never spoken. It was
+   not edited: published definitions are immutable.
+5. **Residual risk.** Record values (names, titles) are inserted into platform sentences as facts
+   the platform looked up. They are the tenant's own data, shown to a visitor who can already see
+   them, but they are not sentence-checked. The composer is still not wired into the runtime; the
+   live conversation path is the legacy engine until slice 5c.
 
 ## The knowledge boundary
 
@@ -111,26 +184,39 @@ test for it.
 
 | Suite | Result |
 | --- | --- |
+First merge (PR #10), Windows development runs; the Linux CI runs are named in the status:
+
+| Suite | Result |
+| --- | --- |
 | Core API | **623 run: 620 passed, 3 skipped** (CI-only) |
 | Product (Linear) | **82 passed** |
 | Composer, conversation and knowledge | `apps/api/tests/test_engine_composer.py` — **67 passed** |
-| Product package | `products/linear_simplified/tests/test_product_package.py` — **44 passed** |
-| Web type check | **passed** |
-| Web unit tests | **23 passed** |
-| Production web build | **passed** |
 | Browser regression | **107 passed** |
 
-No paid provider call was made. Windows runs only; Linux CI is the evidence that counts.
+Reopened sign-off, Windows development runs. The same change also carries the public-demo and
+readiness fixes described in `docs/LIVE_DEPLOYMENT.md`.
+
+| Suite | Result |
+| --- | --- |
+| Core API | **681 run: 678 passed, 3 skipped** (CI-only) |
+| Product (Linear) | **82 passed** |
+| Response boundary | `apps/api/tests/test_response_boundary.py` — **21 passed** |
+| Composer, conversation and knowledge | `apps/api/tests/test_engine_composer.py` — **67 passed** |
+| Router | `apps/api/tests/test_engine_router.py` — **56 passed** |
+| Web type check | **passed** |
+| Web unit tests | **30 passed** |
+| Browser regression | **111 passed** |
+
+No paid provider call was made. Linux CI on the pull request is the sign-off evidence.
 
 ## Notes for the review
 
-1. **Linear v2 must declare conversational templates.** Lifecycle keys may remain in the
-   definition for legacy parity, but the new composer does not trust their sentence bodies.
-   `greeting_named` and other conversational keys still have to exist when their stages use them;
-   the composer raises `MissingTemplate` rather than inventing product identity copy.
-2. **Core owns safety-critical lifecycle copy, not product identity.** Product definitions cannot
-   redefine what proposed, confirmed, executed, failed or cancelled means. Product-owned identity,
-   capability and clarification wording remains separate from that platform guarantee.
+1. **Linear v2 (slice 5a) is written against this boundary.** It must declare its identity copy
+   and choice questions; the composer raises `MissingTemplate` rather than inventing identity copy.
+   It need not declare platform-owned keys at all, and nothing speaks them if it does.
+2. **Core owns every assertion; products own names, identity and choice questions.** Product
+   definitions cannot redefine what proposed, confirmed, executed, failed or cancelled means, nor
+   word a refusal, a count, a history line, a knowledge claim or a slot question.
 3. **Nothing is wired.** A test walks every `app.*` module outside `app/engine/` and fails if any
    of them names the new modules.
 4. **Not in this slice:** no provider call, no dispatch, no runtime path, and no knowledge

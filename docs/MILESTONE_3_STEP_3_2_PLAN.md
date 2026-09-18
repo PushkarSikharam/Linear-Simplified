@@ -1,6 +1,15 @@
 # Milestone 3, Step 3.2: Generic Conversation Engine — Implementation Plan
 
-Status: **plan, revision 4.1, approved by the stakeholder. Slice 4a may begin after the documentation PR merges. Slices 1, 2 and 3 are signed off** — slices 2 and 3 on 2026-09-17, after three review rounds that reproduced eight defects, all fixed with regression tests, and green Linux CI including browser tests. **Revision 4 rewrote the model boundary and split the remaining work; revision 4.1 corrected six contradictions found in it and is approved. Slice 4a's approved scope is the model boundary only — `PromptBuilder`, the strict parser, the materialized `TurnSnapshot`, provenance verification and forced confirmation, with no runtime wiring. Slice 5 is approved only as a planning structure, not for implementation.** Revision 3.2 recorded the routing rules as built in slice 2 (section 3, stages 5 and 6). Revision 3.3 recorded two decisions from the slice 3 transaction reviews: the execution ledger stores identifiers and outcomes, never raw customer record content, and a replay returns the record's current visible state without a second write (section 5).
+Status: **plan, revision 4.2. Slices 1, 2, 3 and 4a are signed off. Slice 4b is merged but its sign-off was reopened by the stakeholder review of 2026-09-18; the response-integrity boundary that review required is built and awaits Linux CI on its pull request. Slice 5a has not started and waits for 4b sign-off.**
+
+- Slices 2 and 3 were signed off on 2026-09-17, after three review rounds that reproduced eight defects, all fixed with regression tests, and green Linux CI including browser tests.
+- Slice 4a (the model boundary) merged through PR #8. Pull-request run 35363767851 and the `main` push run 35364069464 are green on all three jobs, including browser tests. The stakeholder accepted it on 2026-09-18.
+- Slice 4b (the response composer) merged through PR #10, with pull-request run 35380052283 and push run 35380344483 green. The review then found that product-controlled templates were still spoken in answers, refusals and clarifications, and reopened the sign-off. Revision 4.2 records the boundary that closes it (section 8.5); `docs/MILESTONE_3_STEP_3_2_SLICE_4B.md` has the evidence.
+- Slice 5 is approved only as a planning structure, not for implementation.
+
+Revision 4.2 (2026-09-18) sets the response-integrity boundary. The platform owns every sentence that asserts execution, refusal, authorization, scope, counts, retrieved facts, history, failure or knowledge availability. A product supplies names, labels and identity copy, and owns only the choice questions that cannot assert state. Validation rejects state-asserting product copy. Slot questions and capability replies become platform wording. It also adds the stakeholder's mandatory conditions for slice 5a (section 13).
+
+Earlier history: revision 4 rewrote the model boundary and split the remaining work; revision 4.1 corrected six contradictions found in it. Revision 3.2 recorded the routing rules as built in slice 2 (section 3, stages 5 and 6). Revision 3.3 recorded two decisions from the slice 3 transaction reviews: the execution ledger stores identifiers and outcomes, never raw customer record content, and a replay returns the record's current visible state without a second write (section 5).
 
 Revision 4 corrects the model boundary after review. In summary:
 
@@ -469,16 +478,22 @@ product-declared reply-only intents: the contract still requires every intent to
 and revision 4 does not add reply-only execution to the product schema.
 
 - Detection is generic and lives in core.
-- Content comes from the **pinned definition**: `identity` supplies the product and assistant
-  names, persona and greeting.
+- **Who owns the words (revision 4.2).** The pinned definition supplies the product and assistant
+  names and its identity copy (greeting, named greeting, introduction). What the assistant says it
+  can do is **platform wording**, built from the filtered offer list below. The same boundary
+  covers every reply: refusals, counts, history, knowledge availability and slot questions are
+  platform-owned; a product owns only identity copy and the choice questions it asks to tell its
+  own requests apart (`clarify_create`, `clarify_all_items`), which may use names but no facts.
+  Definition validation rejects product copy that asserts state, and the composer checks it again
+  before speaking it. Text a definition declares for a platform-owned key is never spoken.
 - **A capability reply lists only what is honestly executable now.** Generating it from every
   declared action would advertise things that cannot happen. An action is listed only when it is:
   permitted for this product and this caller; supported by the installed adapter; available under
   the caller's current scope; and honestly executable in this version. `create_member` is the
   worked example — declared by the definition, but untranslatable today (section 9), so it is
   never offered.
-- So routing stays generic while each product still speaks for itself, without promising more than
-  it can do.
+- So routing stays generic, and each product keeps its own voice without being able to promise
+  more than the platform can do.
 
 ### 8.6 Unchanged
 
@@ -661,8 +676,8 @@ Each slice leaves every suite green and is reviewable on its own.
 | **2. Normalizer and router** | `Normalizer`, `IntentRouter`, `ConversationMemory` with the section 3 precedence; a shadow harness compares router decisions with the current engine on every golden case | Section 10.5 routing tests; shadow differences listed |
 | **3. Validator, lookup, execution and translator** (mandatory transaction review before slice 4) | `ActionContractValidator`; `ExecutionLedger` plus the execution check on today's write endpoints; `LinearLegacyLookup`; `LinearLegacyTranslator` | Section 4 validator tests; section 10.6 execution tests; lookup-scope tests; per-mapping translator tests |
 | **4a. Model boundary** | `PromptBuilder`; the strict `ModelProposalParser` (section 8.2); the immutable `TurnSnapshot` (section 7.1); provenance verification (section 8.3); forced confirmation for model-originated mutations (section 8.4). No runtime wiring | Section 10.1 parser, provenance, injection, confirmation and snapshot tests; adversarial injection proposing a valid in-scope mutation |
-| **4b. Response composer** | `ResponseComposer` as a response-lifecycle state machine; platform-owned proposed / confirmed / executed / failed / cancelled wording; platform conversation intents (section 8.5); product-defined identity, capability and clarification replies; attributed knowledge excerpts | Wording tests per lifecycle state; no unsupported completion claims; `KnowledgeLookup` honest fallback and source evidence |
-| **5a. Backend integration, shadow mode** | `ConversationEngine` adapter; `DefinitionCache` keyed by definition ID, version **and** checksum, with fresh authorization and lifecycle checks before every cache use; Linear v2. The current engine stays authoritative | Structured parity report; section 10.4 pinning and cache tests; shadow path proven inert (no model, no dispatch) |
+| **4b. Response composer** | `ResponseComposer` as a response-lifecycle state machine; platform-owned proposed / confirmed / executed / failed / cancelled wording; platform conversation intents (section 8.5); **the response-integrity boundary (revision 4.2)**: platform-owned refusal, capability, count, history, knowledge and slot-question wording, product-owned identity copy and choice questions, and definition validation of product copy; attributed knowledge excerpts | Wording tests per lifecycle state; no unsupported completion claims; `KnowledgeLookup` honest fallback and source evidence; **every product template replaced with adversarial wording changes no protected reply** |
+| **5a. Backend integration, shadow mode** (starts after 4b sign-off) | `ConversationEngine` adapter; `DefinitionCache` keyed by definition ID, version **and** checksum, with fresh authorization and lifecycle checks before every cache use; Linear v2, written against the revision 4.2 response boundary. The current engine stays authoritative. **Mandatory:** shadow memory is independent and cannot mutate live sessions, records, ledgers or pending confirmations | Structured parity report, with platform-wording differences classified separately from behaviour differences; section 10.4 pinning and cache tests; shadow path proven inert: **zero paid calls and zero execution keys**, no model, no dispatch |
 | **5b. Execution transport** | The execution envelope in `TurnResponse` (section 5.5); keys for mutations only; the browser sends both required headers; form-originated writes stay keyless | Stale-turn and interruption races; older unresolved keys cancelled by a newer turn; browser writes never triggered by failed, cancelled or stale turns |
 | **5c. Cutover** | The new engine becomes authoritative behind a rollback switch that defaults to the old engine. The old engine **stays in place**, isolated behind that switch: a cutover you cannot reverse is not a cutover | Golden parity with reviewed differences; scripted-model suites; **explicit parity coverage for every `TurnResponse` field** (exit criterion 9); rollback test proving the old engine is restored by the switch alone with no database change; full API, web, browser and Linux CI evidence |
 | **5d. Cleanup** (after cutover acceptance) | The old engine, the rollback switch and the purity exceptions are removed. This **deliberately ends the rollback capability**, which is why it is a separate slice with its own acceptance | Purity allowlist emptied of the engine files (section 12); transitive dependency test green; full suites and Linux CI with the new engine as the only engine |

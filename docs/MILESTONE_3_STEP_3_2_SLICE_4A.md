@@ -1,6 +1,8 @@
 # Milestone 3.2, Slice 4a: The Model Boundary
 
-Status: **LOCALLY APPROVED AFTER RE-REVIEW. Twelve reproduced defects are fixed with regression coverage. All local gates pass; Linux CI remains the final sign-off evidence. Nothing is wired into the runtime.**
+Status: **SIGNED OFF. Twelve reproduced defects are fixed with regression coverage. Nothing is wired into the runtime.**
+
+Sign-off evidence: merged through PR #8 (commit `d802993`). Pull-request run 35363767851 and the `main` push run 35364069464 are green on all three jobs: API tests, web checks and browser tests. The stakeholder accepted the slice on 2026-09-18. The Windows results below are development evidence; the Linux runs are the sign-off.
 Date: 2026-09-17. Plan: `docs/MILESTONE_3_STEP_3_2_PLAN.md` (revision 4.1), sections 7.1, 8.1–8.4.
 Approved scope: `PromptBuilder`, the strict parser, the materialized `TurnSnapshot`, provenance verification, and forced confirmation for model-originated mutations.
 
@@ -68,7 +70,7 @@ intended the operation, and the module's own docstring says so.
 | New: product snapshot source | 6 tests added to `test_product_package.py` |
 | `lint:web`, `test:web` (23), `build:web`, `test:e2e` (107) | all pass |
 
-No paid provider call was made. Windows runs only; Linux CI is the evidence that counts.
+No paid provider call was made. These are the Windows development runs; the Linux CI runs named in the status are the sign-off evidence.
 
 What the tests prove rather than assert:
 

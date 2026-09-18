@@ -239,12 +239,15 @@ class AmbiguityQuestionTest(RouterFixture):
         listing = self.chat().say("contacts for Ana")
         self.assertEqual(listing.response_key, "clarify_person", "a listing is not an assignment")
 
-    def test_without_a_suitable_question_the_router_does_not_act(self):
+    def test_a_slot_question_does_not_depend_on_the_definition_wording_it(self):
+        """Slot questions are platform wording (the 4b response boundary), so a definition that
+        declares none still gets the question, and the router still does not act on a guess."""
         document = engine_definition()
         del document["responses"]["clarify_person"]
         router = IntentRouter(load_engine_definition(document=document), self.lookup)
         result = Conversation(router).say("contacts for Ana")
-        self.assertEqual((result.kind, result.proposal), (RouteKind.FALLBACK, None))
+        self.assertEqual((result.kind, result.response_key, result.proposal),
+                         (RouteKind.CLARIFY, "clarify_person", None))
 
 
 class CorrectionTest(RouterFixture):

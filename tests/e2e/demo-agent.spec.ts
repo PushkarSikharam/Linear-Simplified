@@ -121,16 +121,52 @@ test("milestone 1 failed reset keeps the session and reports the failure", async
   await sendChat(page, "all tickets for Maya");
   await expect(page.getByTestId("issue-filter")).toContainText("Maya Chen");
 
-  await page.route("**/api/agent/demo-data/reset", (route) => route.fulfill({
+  // Reset reloads the saved data for a fresh conversation; make that reload fail.
+  await page.route("**/api/agent/demo-data", (route) => route.fulfill({
     status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Unavailable" })
   }));
-  const reset = page.waitForResponse((response) => response.url().endsWith("/demo-data/reset"));
+  const reset = page.waitForResponse((response) => response.url().endsWith("/api/agent/demo-data"));
   await page.getByTestId("reset-demo").click();
   expect((await reset).status()).toBe(503);
 
   await expect(page.getByTestId("data-error")).toContainText("Reset failed");
   await expect(page.getByTestId("issue-filter")).toContainText("Maya Chen");
   await expect(page.getByTestId("transcript")).toContainText("Maya Chen");
+});
+
+test("a throttled turn keeps the demo connected and asks the visitor to wait", async ({ page }) => {
+  await openApp(page);
+  await page.route(agentTurnRoute, (route) => route.fulfill({
+    status: 429,
+    contentType: "application/json",
+    headers: { "Retry-After": "5" },
+    body: JSON.stringify({ detail: "Too many requests. Please wait a moment and try again." })
+  }));
+
+  await sendChat(page, "show sprint planning");
+
+  await expect(page.getByTestId("transcript")).toContainText("Please wait a moment and try again.");
+  await expect(page.getByTestId("turn-status")).toHaveText("Ready");
+  await expect(page.getByTestId("service-readiness")).toBeHidden();
+  await expect(page.getByTestId("current-view-title")).toHaveText("Dashboard");
+
+  // Once the limit passes, the same conversation carries on.
+  await page.unroute(agentTurnRoute);
+  await sendChat(page, "show sprint planning");
+  await expect(page.getByTestId("current-view-title")).toHaveText("Cycles");
+});
+
+test("a throttled sign-in says to wait rather than reporting an outage", async ({ page }) => {
+  await page.route("**/api/agent/auth/demo-login", (route) => route.fulfill({
+    status: 429,
+    contentType: "application/json",
+    headers: { "Retry-After": "5" },
+    body: JSON.stringify({ detail: "Too many requests. Please wait a moment and try again." })
+  }));
+  await page.goto("/");
+
+  await expect(page.getByTestId("service-readiness")).toContainText("Too many visitors are starting sessions");
+  await expect(page.getByTestId("service-readiness").getByRole("button", { name: "Retry" })).toBeVisible();
 });
 
 test("milestone 1 requests that escape interception never reach a real backend", async ({ request }) => {
@@ -430,6 +466,35 @@ test("runs suggested demo turns and resets to a fresh session", async ({ page })
   await expect(page.getByTestId("transcript")).toContainText("Welcome to Pixel");
   await expect(page.getByTestId("transcript")).not.toContainText("Maya Chen");
   await expect(page.getByTestId("source-list")).toBeHidden();
+});
+
+test("reset starts a fresh conversation and never resets shared demo data", async ({ page }) => {
+  // Demo data is shared by every visitor. The public page may only restart its own conversation;
+  // restoring the data is an operator action on the server.
+  const globalResets: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/demo-data/reset")) globalResets.push(request.url());
+  });
+  await openApp(page);
+
+  const reloaded = page.waitForResponse((response) =>
+    response.url().endsWith("/api/agent/demo-data") && response.request().method() === "GET"
+  );
+  await page.getByTestId("reset-demo").click();
+  expect((await reloaded).ok()).toBe(true);
+  await expect(page.getByTestId("turn-status")).toHaveText("Ready");
+  expect(globalResets).toEqual([]);
+
+  // The API refuses the global reset for the public visitor even when asked directly.
+  const status = await page.evaluate(async () => {
+    const token = window.sessionStorage.getItem("demo_auth_token");
+    const response = await fetch("/api/agent/demo-data/reset", {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    return response.status;
+  });
+  expect(status).toBe(403);
 });
 
 test("opens and highlights Maya Chen's issue from chat", async ({ page }) => {

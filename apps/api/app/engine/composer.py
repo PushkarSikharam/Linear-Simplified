@@ -11,10 +11,19 @@ Only a committed write is described as done.
     cancelled            "Okay, I won't change anything."
     clarification        "Which contact do you mean?"
 
-No model-written sentence is spoken in this slice. Safety-critical lifecycle wording is owned by
-the platform and filled only from validated actions or committed results. Product definitions own
-identity, capability and clarification copy, but cannot redefine what proposed, executed, failed
-or cancelled means.
+No model-written sentence is spoken in this slice.
+
+**Who owns the words** (the response-integrity boundary). The platform owns every sentence that
+asserts something — execution, refusal, authorization, scope, counts, retrieved facts, history,
+failure and knowledge availability — and fills it only from validated actions, committed results
+and platform lookups. A product definition supplies nouns (its product, assistant, entity and view
+names), its identity copy (greeting, introduction) and the choice questions it asks to tell its
+own requests apart. Nothing else it declares is ever spoken: a definition may still carry wording
+for a platform-owned key (definitions published before this boundary do), and the composer
+never reads it.
+
+Product copy is checked when a definition is validated (`app.definitions.copy_rules`), and again
+here before it is spoken, so a definition that bypassed validation still cannot assert state.
 """
 from __future__ import annotations
 
@@ -24,8 +33,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.definitions.contract import ProductDefinition
+from app.definitions.copy_rules import choice_question_problems, identity_copy_problems
 from app.definitions.safety import check_text
+from app.definitions.vocabulary import PRODUCT_CHOICE_KEYS, PRODUCT_VOICE_KEYS
 from app.engine.actions import GenericAction
+from app.engine.conversation import OfferableActions, capability_sentence
 from app.engine.knowledge import Grounding
 
 # Words that assert a change already happened. Checked against model-written speech only.
@@ -61,7 +73,7 @@ class Stage(StrEnum):
 # and "I deleted every customer" passes every lexical check ever written. Retrieving a passage
 # proves a document exists; it does not make a sentence about that document accurate. Until a
 # reply can be bound to its citation and the binding evaluated (3.4 and later), every word the
-# assistant says is composed deterministically from the product's templates and the committed result.
+# assistant says is composed deterministically from platform wording and the committed result.
 MODEL_SPEECH_STAGES: frozenset[Stage] = frozenset()
 
 # The parser already caps model speech; the composer does not rely on that being the only path.
@@ -119,10 +131,56 @@ PLATFORM_FAILURE = "I couldn't complete that request."
 PLATFORM_KNOWLEDGE_UNAVAILABLE = (
     "I don't have approved {product} information to answer that, so I won't guess."
 )
+# Unknown and inaccessible people read identically, so a refusal never reveals that someone
+# exists outside the caller's scope.
+PLATFORM_PERSON_NOT_FOUND = "I can't find {person} in {scope}."
+PLATFORM_NOTHING_OFFERED = "There's nothing I can do for you in {product} right now."
+
+# Every conversational sentence that asserts something. `{label}` is the product's own name for a
+# kind of record (an entity label or plural, chosen by the caller for the count); every other
+# value is supplied by the platform from what it actually found or did.
+PLATFORM_CONVERSATION_TEMPLATES: Mapping[tuple[Stage, str], str] = {
+    # Answers: what can be done, what exists, what happened, what is known.
+    (Stage.ANSWER, "capabilities"): "Here's what I can do in {product}: {capabilities}.",
+    (Stage.ANSWER, "guided_path"): "A good place to start in {product}: {capabilities}.",
+    (Stage.ANSWER, "fallback"): (
+        "I'm not sure how to help with that in {product}. Ask what I can do to see the options."
+    ),
+    (Stage.ANSWER, "next_step"): "Ask what I can do in {product} to see where to go next.",
+    (Stage.ANSWER, "last_change"): "The most recent change: {changes}.",
+    (Stage.ANSWER, "nothing_changed"): "Nothing has changed in this conversation yet.",
+    (Stage.ANSWER, "people_count"): "{scope} has {count} {label}.",
+    (Stage.ANSWER, "anchor_count"): "{scope} has {count} visible {label}: {records}.",
+    (Stage.ANSWER, "conversation_ended"): "Okay, we can stop here.",
+    (Stage.ANSWER, "knowledge_unavailable"): PLATFORM_KNOWLEDGE_UNAVAILABLE,
+    (Stage.UNGROUNDED, "knowledge_unavailable"): PLATFORM_KNOWLEDGE_UNAVAILABLE,
+    # Refusals.
+    (Stage.REFUSED, "out_of_scope"): "I can only help with {product} here, so I can't do that.",
+    (Stage.REFUSED, "destructive_refused"): "I can't delete or erase anything here.",
+    (Stage.REFUSED, "broad_scope_refused"): (
+        "I can only work within {scope}. Change the scope first, then ask again."
+    ),
+    (Stage.REFUSED, "unknown_person"): PLATFORM_PERSON_NOT_FOUND,
+    (Stage.REFUSED, "person_outside_scope"): PLATFORM_PERSON_NOT_FOUND,
+    (Stage.REFUSED, "member_missing"): PLATFORM_PERSON_NOT_FOUND,
+    (Stage.REFUSED, "work_outside_scope"): "I can't find that in {scope}.",
+    (Stage.REFUSED, "fallback"): "I can't help with that here.",
+    # Slot questions: which person or record an action needs. The answer feeds an action the
+    # platform may still refuse, so the question promises nothing about what happens next.
+    (Stage.CLARIFICATION, "clarify_person"): "Which person do you mean: {records}?",
+    (Stage.CLARIFICATION, "clarify_assign"): "Who should {record_id} be assigned to?",
+    (Stage.CLARIFICATION, "clarify_owner"): "Who should own the new {label}?",
+    (Stage.CLARIFICATION, "clarify_update_target"): "Which {label} do you mean?",
+    (Stage.CLARIFICATION, "correction"): "Got it, {view} instead.",
+}
 
 
 class TemplateNotAllowed(ValueError):
     """A stage was asked to speak with wording that does not belong to it."""
+
+
+class UnsafeProductCopy(ValueError):
+    """Product copy that asserts state reached the composer without passing validation."""
 
 # A completed mutation and a proposed one use different templates for the same action.
 EXECUTED_BY_CAPABILITY = {
@@ -157,10 +215,12 @@ class Reply:
     from_model: bool = False
     replaced_model_speech: bool = False
     sources: tuple[str, ...] = ()
+    # True only when the sentence is the product's own identity copy or choice question.
+    product_copy: bool = False
 
 
 class ResponseComposer:
-    """Turns verified state into platform lifecycle copy or scoped product conversation copy."""
+    """Turns verified state into platform wording; products contribute names and identity copy."""
 
     def __init__(self, definition: ProductDefinition, *, visitor_name: str | None = None) -> None:
         self._definition = definition
@@ -206,6 +266,19 @@ class ResponseComposer:
     def answer(self, template_key: str, **values: str) -> Reply:
         return self._render(Stage.ANSWER, template_key, values)
 
+    def capabilities(self, offers: OfferableActions) -> Reply:
+        """What this caller can actually do, from the filtered offers; never a product's claim."""
+        return self._offer_reply("capabilities", offers)
+
+    def guided_path(self, offers: OfferableActions) -> Reply:
+        """Where to start, drawn from the same filtered offers as the capability reply."""
+        return self._offer_reply("guided_path", offers)
+
+    def _offer_reply(self, key: str, offers: OfferableActions) -> Reply:
+        if offers.is_empty:
+            return self._render_platform(Stage.ANSWER, key, PLATFORM_NOTHING_OFFERED, {})
+        return self._render(Stage.ANSWER, key, {"capabilities": capability_sentence(offers)})
+
     def knowledge_answer(self, grounding: Grounding) -> Reply:
         """Answer with an approved passage, or say plainly that there is nothing to answer from.
 
@@ -236,7 +309,7 @@ class ResponseComposer:
         that writes English. A sentence is only trustworthy if it can be tied to what actually
         happened, and nothing in this slice can make that tie: an execution result proves one
         operation, and a retrieved passage proves one document. So every reply is composed from
-        the product's templates, and this method records that the model's sentence was dropped.
+        platform wording, and this method records that the model's sentence was dropped.
         """
         if stage in MODEL_SPEECH_STAGES and _is_plain(speech) and len(speech) <= MAX_MODEL_SPEECH \
                 and not (stage is not Stage.EXECUTED and _claims_completion(speech)):
@@ -247,7 +320,7 @@ class ResponseComposer:
             else self._render(stage, fallback_key, values)
         )
         return Reply(replaced.speech, stage, replaced.template_key, from_model=False,
-                     replaced_model_speech=True)
+                     replaced_model_speech=True, product_copy=replaced.product_copy)
 
     # --- rendering ---
 
@@ -255,10 +328,23 @@ class ResponseComposer:
         allowed = STAGE_TEMPLATES.get(stage, frozenset())
         if key not in allowed:
             raise TemplateNotAllowed(f"{stage} may not be worded with {key}")
+        if key in PRODUCT_VOICE_KEYS:
+            return Reply(self._fill(self._product_copy(key), values), stage, key, product_copy=True)
+        template = PLATFORM_CONVERSATION_TEMPLATES.get((stage, key))
+        if template is None:
+            raise TemplateNotAllowed(f"no platform wording for {stage}:{key}")
+        return self._render_platform(stage, key, template, values)
+
+    def _product_copy(self, key: str) -> str:
+        """The product's own wording for identity copy or a choice question, checked again."""
         template = self._definition.responses.get(key)
         if template is None:
             raise MissingTemplate(key)
-        return Reply(self._fill(template, values), stage, key)
+        check = choice_question_problems if key in PRODUCT_CHOICE_KEYS else identity_copy_problems
+        problems = check(template)
+        if problems:
+            raise UnsafeProductCopy(f"{key}: {'; '.join(problems)}")
+        return template
 
     def _render_lifecycle(self, stage: Stage, key: str, values: Mapping[str, str]) -> Reply:
         allowed = STAGE_TEMPLATES.get(stage, frozenset())

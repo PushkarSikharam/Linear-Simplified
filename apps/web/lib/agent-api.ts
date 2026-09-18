@@ -1,5 +1,5 @@
 import { productConfig } from "@/lib/product-config";
-import { authorizedFetch } from "@/lib/product-data-api";
+import { authorizedFetch, RateLimitedError } from "@/lib/product-data-api";
 import type { DemoAction, DemoActionType, DemoIssue, IntentTrace } from "@/types/demo";
 
 const API_BASE_URL =
@@ -61,6 +61,7 @@ export async function sendAgentTurn(input: {
     })
   });
 
+  if (response.status === 429) throw new RateLimitedError();
   if (!response.ok) {
     throw new Error(`Agent request failed with ${response.status}`);
   }

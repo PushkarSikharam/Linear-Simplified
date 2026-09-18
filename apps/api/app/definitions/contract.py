@@ -10,9 +10,11 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from app.definitions.copy_rules import definition_copy_problems, settings_copy_problems
 from app.definitions.safety import check_key, check_slug, check_template, check_term, check_text, check_value
 from app.definitions.vocabulary import (
     MAX_SCOPE_HOPS,
+    PLATFORM_RESPONSE_KEYS,
     PLATFORM_VIEWS,
     REFERENCE_FIELD_TYPES,
     RESPONSE_KEYS,
@@ -279,6 +281,10 @@ class ProductDefinition(Strict):
         self._check_views(errors)
         self._check_actions(errors)
         self._check_routing(errors)
+        if not errors:
+            # Product copy may not assert state; see `copy_rules`. Checked last, so a definition
+            # that is structurally broken reports that first.
+            errors.extend(definition_copy_problems(self))
         if errors:
             raise ValueError("; ".join(errors))
         return self
@@ -395,7 +401,8 @@ class ProductDefinition(Strict):
     def _check_response_key(self, key: str, errors: list[str]) -> None:
         if key not in RESPONSE_KEYS:
             errors.append(f"unknown response key {key}")
-        elif key not in self.responses:
+        elif key not in self.responses and key not in PLATFORM_RESPONSE_KEYS:
+            # The platform words its own replies, so only product copy has to be supplied.
             errors.append(f"response {key} is referenced but not defined")
 
 
@@ -405,3 +412,10 @@ class TenantSettings(Strict):
     display_name: ShortText | None = None
     assistant_name: ShortText | None = None
     greeting: Template | None = None
+
+    @model_validator(mode="after")
+    def _copy_asserts_nothing(self) -> "TenantSettings":
+        problems = settings_copy_problems(self)
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self

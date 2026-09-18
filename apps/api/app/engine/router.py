@@ -16,7 +16,13 @@ from types import MappingProxyType
 from typing import Any
 
 from app.definitions.contract import ActionSpec, EntitySpec, IntentSpec, MatchRule, ProductDefinition
-from app.definitions.vocabulary import AFFIRMATIONS, CORRECTION_CUES, MUTATING_CAPABILITIES, Capability
+from app.definitions.vocabulary import (
+    AFFIRMATIONS,
+    CORRECTION_CUES,
+    MUTATING_CAPABILITIES,
+    PLATFORM_RESPONSE_KEYS,
+    Capability,
+)
 from app.engine.actions import (
     FilterParam,
     GenericAction,
@@ -668,7 +674,8 @@ class IntentRouter:
             key = "clarify_assign" if capability in MUTATING_CAPABILITIES else "clarify_person"
         else:
             key = SLOT_QUESTIONS.get(slot)
-        return key if key in self._definition.responses else None
+        # Slot questions are platform wording, so they never depend on a definition declaring them.
+        return key if key in PLATFORM_RESPONSE_KEYS or key in self._definition.responses else None
 
     def _matches_any_rule(self, text: NormalizedMessage) -> bool:
         rules: list[MatchRule] = [*self._definition.intents, *self._definition.clarifications]

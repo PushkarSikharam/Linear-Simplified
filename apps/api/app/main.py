@@ -11,6 +11,7 @@ from app.auth import (
     AuthUser,
     create_token,
     create_visitor_token,
+    demo_identity_allowed,
     demo_login_enabled,
     product_record_grant,
     require_any_scope,
@@ -22,6 +23,7 @@ from app.auth import (
     require_scope,
 )
 from app.definitions.access import AccessDenied, ProductAccess, authorize_product
+from app.definitions.integrity import ReadinessCheck
 from app.definitions.sessions import DefinitionUnavailable, SessionEnded, check_pinned_session, pin_new_session
 from app.db import get_connection, migrate
 from app.engine.execution import ExecutionRefused
@@ -36,6 +38,7 @@ from app.services.product_data_store import (
     RecordNotFound,
     ScopeViolation,
 )
+from app.services.rate_limit import RateLimiter
 from app.services.record_writes import KeyedWriter, RecordChange, require_visible_scope
 from app.services.speech_service import SpeechService, SpeechUnavailable
 from app.services.env import env_bool
@@ -48,17 +51,28 @@ product_data = ProductDataStore()
 usage = UsageLedger()
 speech_service = SpeechService(usage)
 keyed_writes = KeyedWriter()
+readiness = ReadinessCheck()
+# Armed at startup (see `lifespan`), so tests that never start the server are not throttled.
+rate_limits = RateLimiter()
 
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    was_armed = rate_limits.armed
     migrate()
-    if env_bool("PIXEL_DEMO_SEEDS", default=False):
-        # Demo records are created once, at startup, and never by a request: a refused or
-        # unauthorized request must leave product data exactly as it found it.
-        product_data.seed_if_empty()
-    yield
+    rate_limits.arm()
+    try:
+        if env_bool("PIXEL_DEMO_SEEDS", default=False):
+            # Demo records are created once, at startup, and never by a request: a refused or
+            # unauthorized request must leave product data exactly as it found it.
+            product_data.seed_if_empty()
+        yield
+    finally:
+        # A TestClient owns only the lifecycle state it started. Production remains armed until
+        # process shutdown; a temporary test server must not throttle later direct-app tests.
+        if not was_armed:
+            rate_limits.disarm()
 
 
 app = FastAPI(
@@ -107,11 +121,19 @@ app.add_middleware(
 
 @app.get("/health")
 @app.get("/api/health")
-def health() -> dict[str, str]:
+def health():
     # Readiness includes storage. A process that cannot open its persistent database must not be
     # advertised to the web app as healthy.
     with get_connection() as connection:
         connection.execute("select 1").fetchone()
+    # Readiness also includes being able to start a conversation. A backend that answers every
+    # turn with "not available" is not healthy, however well its database opens.
+    problems = readiness.problems()
+    if problems:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "reason": "sessions_cannot_start", "products": len(problems)},
+        )
     return {"status": "ok"}
 
 
@@ -126,11 +148,14 @@ class DemoLoginResponse(BaseModel):
 
 
 @app.post("/api/auth/demo-login", response_model=DemoLoginResponse)
-def demo_login(body: DemoLoginRequest) -> DemoLoginResponse:
+def demo_login(body: DemoLoginRequest, http: Request) -> DemoLoginResponse:
+    rate_limits.enforce("login", http)
     if not demo_login_enabled():
         return JSONResponse(status_code=403, content={"detail": "Demo login is disabled."})
     organizations = agent.directory.organizations_of(body.user_id)
-    if len(organizations) != 1:
+    # One answer for unknown users and for identities the demo may not issue, so the endpoint
+    # never confirms that an administrator exists.
+    if len(organizations) != 1 or not demo_identity_allowed(body.user_id, organizations[0]):
         return JSONResponse(status_code=404, content={"detail": "Unknown demo user."})
     tenant_id = organizations[0]
     token = create_token(body.user_id, tenant_id)
@@ -148,8 +173,9 @@ class VisitorSessionResponse(BaseModel):
     "/api/organizations/{tenant_id}/products/{product_id}/visitor-sessions",
     response_model=VisitorSessionResponse,
 )
-def start_visitor_session(tenant_id: str, product_id: str) -> VisitorSessionResponse:
+def start_visitor_session(tenant_id: str, product_id: str, http: Request) -> VisitorSessionResponse:
     """A visitor session is scoped to one product and grants nothing else."""
+    rate_limits.enforce("login", http)
     try:
         token, visitor_id = create_visitor_token(tenant_id, product_id)
     except AccessDenied:
@@ -170,17 +196,26 @@ def get_demo_data(grant: RecordGrant = Depends(require_record_access)) -> dict[s
 
 
 @app.post("/api/demo-data/reset")
-def reset_demo_data(grant: RecordGrant = Depends(require_record_access)) -> dict[str, list[dict]]:
+def reset_demo_data(http: Request, user: AuthUser = Depends(require_member),
+                    grant: RecordGrant = Depends(require_record_access)) -> dict[str, list[dict]]:
+    """Resets everyone's demo data, so it belongs to a record administrator only.
+
+    The public demo identity is never one (see `demo_identity_allowed`); operators reset from the
+    server with `python -m app.ops reset-demo-data`.
+    """
+    rate_limits.enforce("reset", http, identity=user.user_id)
     require_record_admin(grant)
     return product_data.reset()
 
 
 @app.post("/api/demo-data/issues")
 def create_demo_issue(issue: IssueInput,
+                      http: Request,
                       user: AuthUser = Depends(require_member),
                       idempotency_key: str | None = Header(default=None, max_length=200),
                       x_execution_key: str | None = Header(default=None, max_length=200),
                       x_session_id: str | None = Header(default=None, max_length=100)) -> dict:
+    rate_limits.enforce("write", http, identity=user.user_id)
     payload = issue.model_dump(mode="json")
     if x_execution_key:
         _refuse_legacy_idempotency(idempotency_key)
@@ -195,9 +230,11 @@ def create_demo_issue(issue: IssueInput,
 
 @app.put("/api/demo-data/issues/{issue_id}")
 def update_demo_issue(issue_id: str, issue: IssueInput,
+                      http: Request,
                       user: AuthUser = Depends(require_member),
                       x_execution_key: str | None = Header(default=None, max_length=200),
                       x_session_id: str | None = Header(default=None, max_length=100)) -> dict:
+    rate_limits.enforce("write", http, identity=user.user_id)
     payload = issue.model_dump(mode="json")
     if x_execution_key:
         return _keyed(x_execution_key, x_session_id, user, ["update_issue", issue_id, payload],
@@ -292,16 +329,22 @@ def _keyed(execution_key: str, session_id: str | None, user: AuthUser, request: 
 
 @app.post("/api/demo-data/projects")
 def create_demo_project(project: ProjectInput, workspace_scope_id: str,
+                        http: Request,
+                        user: AuthUser = Depends(require_member),
                         grant: RecordGrant = Depends(require_record_access),
                         idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
+    rate_limits.enforce("write", http, identity=user.user_id)
     require_scope(workspace_scope_id, grant)
     return product_data.save_project(project.model_dump(mode="json"), workspace_scope_id, idempotency_key)
 
 
 @app.post("/api/demo-data/cycles")
 def create_demo_cycle(cycle: CycleInput,
+                      http: Request,
+                      user: AuthUser = Depends(require_member),
                       grant: RecordGrant = Depends(require_record_access),
                       idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
+    rate_limits.enforce("write", http, identity=user.user_id)
     # Cycles without a project are workspace-wide and reserved for record administrators.
     if cycle.projectId is None:
         require_record_admin(grant)
@@ -312,8 +355,11 @@ def create_demo_cycle(cycle: CycleInput,
 
 @app.post("/api/demo-data/team-members")
 def create_demo_team_member(member: MemberInput, workspace_scope_id: str,
+                            http: Request,
+                            user: AuthUser = Depends(require_member),
                             grant: RecordGrant = Depends(require_record_access),
                             idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
+    rate_limits.enforce("write", http, identity=user.user_id)
     require_scope(workspace_scope_id, grant)
     return product_data.save_team_member(member.model_dump(mode="json"), workspace_scope_id, idempotency_key)
 
@@ -338,8 +384,10 @@ class SpeechRequest(BaseModel):
 
 
 @app.post("/api/speech", response_class=Response)
-def synthesize_speech(body: SpeechRequest, user: AuthUser = Depends(require_auth)) -> Response:
+def synthesize_speech(body: SpeechRequest, http: Request,
+                      user: AuthUser = Depends(require_auth)) -> Response:
     """Every check runs before any budget is reserved or any provider is contacted."""
+    rate_limits.enforce("speech", http, identity=user.user_id)
     try:
         access = authorize_product(user, body.product_id, agent.directory)
     except AccessDenied:
@@ -400,8 +448,9 @@ def usage_summary(day: str | None = None, user: AuthUser = Depends(require_membe
 
 
 @app.post("/api/turn", response_model=TurnResponse)
-def create_turn(request: TurnRequest,
+def create_turn(request: TurnRequest, http: Request,
                 user: AuthUser = Depends(require_auth)) -> TurnResponse:
+    rate_limits.enforce("turn", http, identity=user.user_id)
     try:
         authorize_product(user, request.product_id, agent.directory)
     except AccessDenied:

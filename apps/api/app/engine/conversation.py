@@ -2,8 +2,9 @@
 
 Greetings, identity and "what can you do" are recognised by the platform, not declared by a
 product: the action contract requires every intent to name an action, and revision 4.1 does not
-add reply-only execution to the product schema. So detection lives here, generically, while every
-word comes from the pinned definition's own templates.
+add reply-only execution to the product schema. So detection lives here, generically. A greeting
+or an introduction is the product's own identity copy; what the assistant says it can do is the
+platform's, built from the filtered offers below (see the composer's response boundary).
 
 The capability reply is the part that needs care. Listing every declared action would advertise
 things that cannot happen — an action the installed adapter cannot express, one the caller may not
@@ -185,7 +186,6 @@ def _trim(description: str) -> str:
     return description.rstrip(".").strip()
 
 
-# Legacy conversational response key retained for definition compatibility. The response composer
-# uses platform-owned wording for an ungrounded knowledge result; calling `answer()` with this key
-# remains product-authored conversational copy and does not carry grounding evidence.
+# The reply for a question no installed knowledge source can answer. Knowledge availability is
+# asserted by the platform, so this is always platform wording, however a definition words it.
 KNOWLEDGE_UNAVAILABLE_KEY = "knowledge_unavailable"

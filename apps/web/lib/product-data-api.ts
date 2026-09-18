@@ -10,8 +10,10 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL
   ?? (typeof window === "undefined" ? "http://127.0.0.1:8001/api" : "/api/agent");
 
-// Which seeded demo identity the browser signs in as. Non-admin users only see their workspace.
-const DEMO_USER_ID = process.env.NEXT_PUBLIC_PIXEL_DEMO_USER ?? "demo-admin";
+// Which seeded demo identity the browser signs in as. The default is the public demo visitor:
+// both demo workspaces, and no administration. The backend refuses to issue an administrator's
+// token through the demo login, so this default is a convenience, not the security boundary.
+const DEMO_USER_ID = process.env.NEXT_PUBLIC_PIXEL_DEMO_USER ?? "demo-visitor";
 
 /** A record write the server rejected. Its message is safe to show to the user. */
 export class RecordSaveError extends Error {
@@ -52,6 +54,17 @@ export function setAuthToken(token: string | null): void {
   }
 }
 
+/**
+ * The API refused a request because too many arrived too quickly. Nothing was done, and the
+ * service is healthy: the visitor only needs to wait, so this must never read as an outage.
+ */
+export class RateLimitedError extends Error {
+  constructor() {
+    super("Edith is receiving a lot of requests right now. Please wait a moment and try again.");
+    this.name = "RateLimitedError";
+  }
+}
+
 export async function ensureDemoLogin(userId = DEMO_USER_ID): Promise<void> {
   if (getAuthToken()) return;
   if (_loginPromise) return _loginPromise;
@@ -62,6 +75,7 @@ export async function ensureDemoLogin(userId = DEMO_USER_ID): Promise<void> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId })
       });
+      if (response.status === 429) throw new RateLimitedError();
       if (!response.ok) {
         throw new Error("Demo login failed. Is the backend running?");
       }
@@ -102,13 +116,6 @@ export function authHeaders(): Record<string, string> {
 export async function loadDemoData(): Promise<DemoDataResponse> {
   const response = await authorizedFetch(apiUrl("/demo-data"), {
     cache: "no-store"
-  });
-  return parseJsonResponse<DemoDataResponse>(response);
-}
-
-export async function resetStoredDemoData(): Promise<DemoDataResponse> {
-  const response = await authorizedFetch(apiUrl("/demo-data/reset"), {
-    method: "POST"
   });
   return parseJsonResponse<DemoDataResponse>(response);
 }

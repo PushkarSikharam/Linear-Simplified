@@ -1,0 +1,12 @@
+# Files whose exact bytes are part of an identity must be byte-identical on every checkout.
+#
+# A product definition is registered by the sha256 of its file, and a session is pinned to that
+# checksum. Git's line-ending conversion on Windows turns LF into CRLF on checkout, which changes
+# the bytes and therefore the checksum: the same definition then has one identity on Windows and
+# another on Linux, and a database registered on one refuses every session on the other.
+#
+# These rules keep definitions, seeds, adapter manifests and golden recordings LF everywhere.
+products/**/*.yaml text eol=lf
+products/**/*.yml text eol=lf
+products/**/*.json text eol=lf
+apps/web/adapters/**/*.json text eol=lf
