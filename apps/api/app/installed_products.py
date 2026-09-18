@@ -22,6 +22,9 @@ class ProductPackage:
     lookup_factory: Callable[..., Any] | None = None
     # Translates validated generic actions for the current web app (added in slice 3; removed in 3.6).
     legacy_translator: Callable[..., Any] | None = None
+    # Builds a scope-bound KnowledgeLookup for one caller (added in slice 4b). A product without
+    # documents leaves this unset, and the platform then answers knowledge questions honestly.
+    knowledge_factory: Callable[..., Any] | None = None
 
 
 class PackageMissing(LookupError):

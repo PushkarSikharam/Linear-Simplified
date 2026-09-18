@@ -27,12 +27,17 @@ from app.engine.validator import ValidatedAction  # noqa: E402
 from app.record_access import RecordGrant  # noqa: E402
 from app.services import env as env_module  # noqa: E402
 from app.services.product_data_store import ProductDataStore  # noqa: E402
+from app.engine.knowledge import KnowledgeContext, KnowledgeLookup  # noqa: E402
 from app.engine.snapshot import SnapshotSource, TurnSnapshot, take_snapshot  # noqa: E402
 from products.linear_simplified.backend.lookup import (  # noqa: E402
     PEOPLE_ENTITY,
     PERSON_FIELDS,
     LinearLegacyLookup,
     lookup_for,
+)
+from products.linear_simplified.backend.knowledge import (  # noqa: E402
+    LinearKnowledgeLookup,
+    knowledge_for,
 )
 from products.linear_simplified.backend.package import PACKAGE  # noqa: E402
 from products.linear_simplified.backend.translator import (  # noqa: E402
@@ -340,6 +345,93 @@ class PackageRegistrationTest(ProductRecordFixture):
         from app.installed_products import package_for
 
         self.assertIs(package_for("linear_simplified"), PACKAGE)
+
+
+DEFINITION_ID = "linear_simplified"
+
+
+def knowledge_context(definition_id: str = DEFINITION_ID) -> KnowledgeContext:
+    """A caller's knowledge context. Every field is carried, whatever this implementation reads."""
+    return KnowledgeContext(
+        tenant_id="pixel-dev", product_id="linear-demo", definition_id=definition_id,
+        definition_version=1, definition_checksum="a" * 64, knowledge_version=1,
+        scope_label=PRODUCT_ENG,
+    )
+
+
+class KnowledgeSourceTest(ProductRecordFixture):
+    """This product's knowledge lookup: bound to one product, read-only, honest when empty."""
+
+    def test_the_lookup_satisfies_the_platform_protocol(self):
+        self.assertIsInstance(knowledge_for(knowledge_context()), KnowledgeLookup)
+
+    def test_it_finds_passages_for_a_product_question(self):
+        passages = knowledge_for(knowledge_context()).search("how do cycles work", 2)
+        self.assertTrue(passages, "the product ships documents about its own features")
+        for passage in passages:
+            self.assertTrue(passage.title and passage.source and passage.snippet)
+
+    def test_an_unknown_definition_finds_nothing_rather_than_guessing(self):
+        self.assertEqual(knowledge_for(knowledge_context("not_a_definition")).search("cycles", 2), [])
+
+    def test_documents_are_keyed_by_definition_not_by_product(self):
+        """A property of today's static documents, not of the boundary: 3.4 changes this."""
+        self.assertEqual(
+            knowledge_for(knowledge_context("linear_demo")).search("how do cycles work", 2), []
+        )
+        self.assertTrue(knowledge_for(knowledge_context()).search("how do cycles work", 2))
+
+    def test_the_lookup_carries_the_whole_caller_context(self):
+        """The boundary carries organization, product, version and scope from the start."""
+        context = knowledge_context()
+        lookup = knowledge_for(context)
+        self.assertEqual(lookup.context.tenant_id, "pixel-dev")
+        self.assertEqual(lookup.context.product_id, "linear-demo")
+        self.assertEqual(lookup.context.definition_version, 1)
+        self.assertEqual(lookup.context.definition_checksum, "a" * 64)
+        self.assertEqual(lookup.context.scope_label, PRODUCT_ENG)
+
+    def test_a_context_without_an_organization_is_refused(self):
+        with self.assertRaises(ValueError):
+            KnowledgeContext(tenant_id="", product_id="linear-demo", definition_id=DEFINITION_ID,
+                             definition_version=1, definition_checksum="a" * 64,
+                             knowledge_version=1, scope_label=PRODUCT_ENG)
+
+    def test_malformed_identity_versions_checksum_and_scope_are_refused(self):
+        valid = dict(
+            tenant_id="pixel-dev", product_id="linear-demo", definition_id=DEFINITION_ID,
+            definition_version=1, definition_checksum="a" * 64, knowledge_version=1,
+            scope_label=PRODUCT_ENG,
+        )
+        bad_values = (
+            {"tenant_id": " "},
+            {"product_id": "not valid"},
+            {"definition_id": ""},
+            {"definition_version": 0},
+            {"definition_version": True},
+            {"knowledge_version": -1},
+            {"definition_checksum": "checksum"},
+            {"scope_label": ""},
+        )
+        for change in bad_values:
+            with self.subTest(change):
+                with self.assertRaises(ValueError):
+                    KnowledgeContext(**{**valid, **change})
+
+    def test_search_takes_no_product_argument(self):
+        import inspect
+
+        parameters = set(inspect.signature(LinearKnowledgeLookup.search).parameters)
+        self.assertEqual(parameters, {"self", "text", "limit"})
+
+    def test_an_empty_question_finds_nothing(self):
+        self.assertEqual(knowledge_for(knowledge_context()).search("   ", 2), [])
+
+    def test_the_limit_is_respected(self):
+        self.assertLessEqual(len(knowledge_for(knowledge_context()).search("cycles issues projects", 1)), 1)
+
+    def test_the_package_registers_the_knowledge_factory_in_code(self):
+        self.assertIs(PACKAGE.knowledge_factory, knowledge_for)
 
 
 if __name__ == "__main__":

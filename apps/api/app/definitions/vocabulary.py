@@ -46,6 +46,9 @@ RESPONSE_KEYS = frozenset({
     "record_create_proposed", "record_update_proposed", "confirm_action", "action_cancelled",
     # Added in 3.2: the question asked when a request names more than one visible person.
     "clarify_person",
+    # Added in 3.2 slice 4b: what to say when no knowledge source can answer a question. The
+    # platform decides *when* this is used; the product still owns the words.
+    "knowledge_unavailable",
 })
 
 # Whole-message replies that confirm a pending action. Anything else cancels it.
