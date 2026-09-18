@@ -23,3 +23,5 @@ playwright-report/
 playwright/.cache/
 *.exe
 tmp-*.png
+
+.vercel/
