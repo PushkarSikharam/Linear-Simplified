@@ -186,7 +186,7 @@ class SpeechProvidersTest(LedgerFixture):
         self.assertEqual(providers[1].style, "Speak warmly.")
 
     def test_azure_escapes_text_into_ssml(self):
-        ssml = AzureSpeech("k", "eastus", "en-US-Ava:DragonHDLatestNeural", "fmt").ssml('<break/> & "quotes"')
+        ssml = AzureSpeech("k", "eastus", "en-US-AvaMultilingualNeural", "fmt").ssml('<break/> & "quotes"')
         self.assertIn("&lt;break/&gt; &amp; &quot;quotes&quot;", ssml)
 
     def test_gemini_keeps_the_key_out_of_the_url_and_returns_wav(self):

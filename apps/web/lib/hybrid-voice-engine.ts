@@ -10,6 +10,7 @@ export type HybridVoiceCallbacks = {
   onUserTranscript: (text: string, isFinal: boolean) => void;
   onAgentSpeech: (text: string) => void;
   onError: (errorMsg: string) => void;
+  onCloudFallback?: (message: string) => void;
   /** Product whose Pixel is speaking; the API authorizes and bills speech against it. */
   productId: string;
   /** Conversation the spoken text belongs to, for usage attribution. */
@@ -79,6 +80,14 @@ export class HybridVoiceEngine {
 
   private isSpeakingSelf = false;
 
+  private reportCloudFallback(): void {
+    this.callbacks.onCloudFallback?.("Cloud voice unavailable. Using browser voice.");
+  }
+
+  private clearCloudFallback(): void {
+    this.callbacks.onCloudFallback?.("");
+  }
+
   private pauseRecognition(): void {
     this.isSpeakingSelf = true;
     if (this.recognition) {
@@ -121,6 +130,7 @@ export class HybridVoiceEngine {
       // Give Microsoft Azure enough time to synthesize premium speech before falling back.
       // The fallback is intentionally visible in the UI so the demo never mislabels audio.
       try {
+        this.clearCloudFallback();
         const timer = setTimeout(() => controller.abort(), SPEECH_TIMEOUT_MS);
         const res = await this.requestSpeech(text, controller.signal);
         clearTimeout(timer);
@@ -130,6 +140,7 @@ export class HybridVoiceEngine {
         }
 
         if (isAudio(res)) {
+          this.clearCloudFallback();
           this.mode = modeForEngine(res) ?? this.mode;
 
           const blob = await res.blob();
@@ -201,17 +212,22 @@ export class HybridVoiceEngine {
           audio.onended = handleDone;
           audio.onerror = () => {
             if (animInterval) { clearInterval(animInterval); animInterval = null; }
+            this.reportCloudFallback();
             this.fallbackBrowserSpeech(text, finish, resumeListening);
           };
 
           await audio.play().catch(() => {
             if (animInterval) { clearInterval(animInterval); animInterval = null; }
+            this.reportCloudFallback();
             this.fallbackBrowserSpeech(text, finish, resumeListening);
           });
           return;
         }
-      } catch {
-        // Cloud TTS unavailable or timed out — use browser voice
+        this.reportCloudFallback();
+      } catch (error) {
+        if (gen === this.speakOnlyGen) {
+          this.reportCloudFallback();
+        }
       }
 
       if (gen !== this.speakOnlyGen) {
@@ -371,9 +387,13 @@ export class HybridVoiceEngine {
       };
       audio.onerror = () => {
         this.cancelSpeech();
+        this.reportCloudFallback();
         playBrowserVoice();
       };
-      audio.play().catch(() => playBrowserVoice());
+      audio.play().catch(() => {
+        this.reportCloudFallback();
+        playBrowserVoice();
+      });
     };
 
     // Check cache first — avoids burning API quota on repeated greeting playback
@@ -384,6 +404,7 @@ export class HybridVoiceEngine {
     }
 
     // Try server-side neural TTS first; the provider is named only once the API reports it.
+    this.clearCloudFallback();
     this.setStatus("Preparing", this.mode === "local" ? "connecting" : this.mode);
     this.speakOnlyAbort = new AbortController();
     const signal = this.speakOnlyAbort.signal;
@@ -398,6 +419,7 @@ export class HybridVoiceEngine {
         clearTimeout(fetchTimer);
         if (gen !== this.speakOnlyGen) return;
         if (isAudio(res)) {
+          this.clearCloudFallback();
           const mode = modeForEngine(res);
           if (mode) {
             this.mode = mode;
@@ -411,11 +433,13 @@ export class HybridVoiceEngine {
             playBlob(blob);
           });
         }
+        this.reportCloudFallback();
         playBrowserVoice();
       })
-      .catch(() => {
+      .catch((error) => {
         clearTimeout(fetchTimer);
         if (gen !== this.speakOnlyGen) return;
+        this.reportCloudFallback();
         playBrowserVoice();
       });
   }

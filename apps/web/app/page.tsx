@@ -2899,6 +2899,7 @@ function ConversationCard({
   const [spectrum, setSpectrum] = useState<SpectrumData>([15, 20, 15, 18, 12]);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [voiceError, setVoiceError] = useState("");
+  const [voiceFallbackNotice, setVoiceFallbackNotice] = useState("");
   // Replies are spoken only after the visitor turns voice on; neural speech is a paid call.
   const [isTTSEnabled, setIsTTSEnabled] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -3007,6 +3008,7 @@ function ConversationCard({
       onError: (err) => {
         setVoiceError(err);
       },
+      onCloudFallback: setVoiceFallbackNotice,
       productId: productConfig.id,
       getSessionId: () => sessionIdRef.current
     });
@@ -3262,6 +3264,7 @@ function ConversationCard({
               setIsTTSEnabled(nextState);
               if (!nextState) {
                 voiceEngineRef.current?.cancelSpeech();
+                setVoiceFallbackNotice("");
               }
             }}
             title={isTTSEnabled ? "Mute agent voice" : "Unmute agent voice"}
@@ -3287,6 +3290,14 @@ function ConversationCard({
             ))}
           </div>
         </div>
+        {voiceFallbackNotice ? (
+          <p className="voice-fallback-text" data-testid="voice-fallback" role="status">
+            {voiceFallbackNotice}
+          </p>
+        ) : null}
+        {voiceError ? (
+          <p className="voice-error-text" role="alert">{voiceError}</p>
+        ) : null}
       </div>
     </section>
   );
