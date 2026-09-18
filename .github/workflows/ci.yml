@@ -43,6 +43,36 @@ jobs:
           .venv/bin/pip install --requirement apps/api/requirements.lock
       - name: Run API tests
         run: npm run test:api
+      - name: Build API deployment image
+        run: docker build --file Dockerfile.api --tag pixel-api:ci .
+      - name: Smoke-test API deployment image
+        run: |
+          docker run --detach --name pixel-api-ci --publish 127.0.0.1:8011:8001 \
+            --tmpfs /data \
+            --env PIXEL_DB_PATH=/data/demo.sqlite3 \
+            --env PIXEL_AUTH_SECRET=ci-only-stable-auth-secret \
+            --env PIXEL_SYNTHETIC_DEMO=true \
+            --env PIXEL_DEMO_SEEDS=true \
+            --env PIXEL_PAID_PROVIDERS_ENABLED=false \
+            --env LLM_ENABLED=false \
+            pixel-api:ci
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8011/health > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            docker logs pixel-api-ci
+            exit 1
+          fi
+          curl --fail --silent \
+            --header 'Content-Type: application/json' \
+            --data '{"user_id":"demo-admin"}' \
+            http://127.0.0.1:8011/api/auth/demo-login > /dev/null
+          docker rm --force pixel-api-ci
 
   web:
     name: Web checks

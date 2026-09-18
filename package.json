@@ -11,6 +11,7 @@
     "test:web": "npm --workspace apps/web run test",
     "test:e2e": "playwright test",
     "measure:usage": "playwright test --config playwright.measure.config.ts",
+    "smoke:live": "node scripts/smoke-live.mjs",
     "test:api": "node scripts/python.mjs -m unittest discover -s apps/api/tests && node scripts/python.mjs -m unittest discover -s products -t . -p \"test_*.py\"",
     "dev:api": "node scripts/python.mjs -m uvicorn app.main:app --app-dir apps/api --reload --port 8001",
     "start:api": "node scripts/python.mjs -m uvicorn app.main:app --app-dir apps/api --port 8001"

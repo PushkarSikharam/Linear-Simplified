@@ -23,7 +23,7 @@ from app.auth import (
 )
 from app.definitions.access import AccessDenied, ProductAccess, authorize_product
 from app.definitions.sessions import DefinitionUnavailable, SessionEnded, check_pinned_session, pin_new_session
-from app.db import migrate
+from app.db import get_connection, migrate
 from app.engine.execution import ExecutionRefused
 from app.record_access import RecordGrant, legacy_record_owner
 from app.schemas import CancelTurnRequest, CancelTurnResponse, TurnRequest, TurnResponse
@@ -106,7 +106,12 @@ app.add_middleware(
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health() -> dict[str, str]:
+    # Readiness includes storage. A process that cannot open its persistent database must not be
+    # advertised to the web app as healthy.
+    with get_connection() as connection:
+        connection.execute("select 1").fetchone()
     return {"status": "ok"}
 
 

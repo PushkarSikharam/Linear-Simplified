@@ -1,0 +1,18 @@
+FROM python:3.14-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY apps/api/requirements.lock /app/apps/api/requirements.lock
+RUN python -m pip install --no-cache-dir --requirement /app/apps/api/requirements.lock
+
+COPY apps/api /app/apps/api
+COPY apps/web/adapters /app/apps/web/adapters
+COPY packages/shared /app/packages/shared
+COPY products /app/products
+
+EXPOSE 8001
+
+CMD ["sh", "-c", "python -m uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port ${PORT:-8001}"]

@@ -1529,6 +1529,35 @@ h3 {
   margin-bottom: 10px;
 }
 
+.service-readiness {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid #4b4d55;
+  border-radius: 8px;
+  background: #25262c;
+  color: #f4f4f6;
+}
+
+.service-readiness strong {
+  font-size: 12px;
+}
+
+.service-readiness span {
+  grid-column: 1;
+  color: #b7b8c0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.service-readiness button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
 .conversation-card .section-kicker {
   color: #a7a7ad;
 }
@@ -1668,7 +1697,7 @@ h3 {
   overflow-wrap: anywhere;
 }
 
-.demo-path-list button:hover {
+.demo-path-list button:not(:disabled):hover {
   border-color: #52545c;
   background: #2b2c31;
 }
@@ -1750,6 +1779,12 @@ h3 {
 
 .conversation-card .chat-form button:not(:disabled):hover {
   background: #744040;
+}
+
+.conversation-card button:disabled,
+.conversation-card input:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .conversation-card .voice-control {
