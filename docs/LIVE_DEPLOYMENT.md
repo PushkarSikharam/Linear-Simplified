@@ -19,6 +19,7 @@ PIXEL_AUTH_SECRET=<long random value>
 PIXEL_SYNTHETIC_DEMO=true
 PIXEL_DEMO_SEEDS=true
 PIXEL_DEMO_LOGIN_USERS=demo-visitor
+PIXEL_DEMO_IDLE_RESET_MINUTES=20
 PIXEL_SESSION_MAX_AGE_SECONDS=86400
 ```
 
@@ -75,7 +76,10 @@ is reachable through the public API.
   public identity is one. The page's **Reset** button starts a fresh conversation for that visitor
   and reloads the data; it never resets shared data. Operators use `reset-demo-data` above.
 - **Known limitation:** demo records are shared by every visitor. One visitor's change is visible
-  to the next until an operator resets. Per-visitor, disposable demo state is not built yet.
+  to anyone using the demo at the same time. Per-visitor, disposable demo state is not built yet.
+- **Interim remedy:** with `PIXEL_DEMO_IDLE_RESET_MINUTES=20`, a visitor who signs in after the
+  demo was changed and then left unused for 20 minutes starts from the seed. The log line
+  `demo_data_restored` (logger `pixel.demo`) records each restore. Unset or `0` turns it off.
 
 ### Abuse limits
 

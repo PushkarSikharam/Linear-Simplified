@@ -38,6 +38,7 @@ from app.services.product_data_store import (
     RecordNotFound,
     ScopeViolation,
 )
+from app.services.demo_refresh import IdleDemoReset
 from app.services.rate_limit import RateLimiter
 from app.services.record_writes import KeyedWriter, RecordChange, require_visible_scope
 from app.services.speech_service import SpeechService, SpeechUnavailable
@@ -54,14 +55,18 @@ keyed_writes = KeyedWriter()
 readiness = ReadinessCheck()
 # Armed at startup (see `lifespan`), so tests that never start the server are not throttled.
 rate_limits = RateLimiter()
+# Restores the shared demo between visitors; off unless PIXEL_DEMO_IDLE_RESET_MINUTES is set.
+idle_reset = IdleDemoReset()
 
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     was_armed = rate_limits.armed
+    reset_was_armed = idle_reset.armed
     migrate()
     rate_limits.arm()
+    idle_reset.arm()
     try:
         if env_bool("PIXEL_DEMO_SEEDS", default=False):
             # Demo records are created once, at startup, and never by a request: a refused or
@@ -73,6 +78,8 @@ async def lifespan(_: FastAPI):
         # process shutdown; a temporary test server must not throttle later direct-app tests.
         if not was_armed:
             rate_limits.disarm()
+        if not reset_was_armed:
+            idle_reset.disarm()
 
 
 app = FastAPI(
@@ -157,6 +164,8 @@ def demo_login(body: DemoLoginRequest, http: Request) -> DemoLoginResponse:
     # never confirms that an administrator exists.
     if len(organizations) != 1 or not demo_identity_allowed(body.user_id, organizations[0]):
         return JSONResponse(status_code=404, content={"detail": "Unknown demo user."})
+    # A new visitor starts from the seed if earlier visitors changed it and then left.
+    idle_reset.before_sign_in(product_data.reset)
     tenant_id = organizations[0]
     token = create_token(body.user_id, tenant_id)
     return DemoLoginResponse(token=token, user_id=body.user_id, tenant_id=tenant_id)
@@ -192,6 +201,7 @@ def start_visitor_session(tenant_id: str, product_id: str, http: Request) -> Vis
 
 @app.get("/api/demo-data")
 def get_demo_data(grant: RecordGrant = Depends(require_record_access)) -> dict[str, list[dict]]:
+    idle_reset.touched()
     return product_data.load(grant.visible_scope_ids())
 
 
@@ -205,7 +215,9 @@ def reset_demo_data(http: Request, user: AuthUser = Depends(require_member),
     """
     rate_limits.enforce("reset", http, identity=user.user_id)
     require_record_admin(grant)
-    return product_data.reset()
+    data = product_data.reset()
+    idle_reset.restored()
+    return data
 
 
 @app.post("/api/demo-data/issues")
@@ -216,6 +228,7 @@ def create_demo_issue(issue: IssueInput,
                       x_execution_key: str | None = Header(default=None, max_length=200),
                       x_session_id: str | None = Header(default=None, max_length=100)) -> dict:
     rate_limits.enforce("write", http, identity=user.user_id)
+    idle_reset.touched(changed=True)
     payload = issue.model_dump(mode="json")
     if x_execution_key:
         _refuse_legacy_idempotency(idempotency_key)
@@ -235,6 +248,7 @@ def update_demo_issue(issue_id: str, issue: IssueInput,
                       x_execution_key: str | None = Header(default=None, max_length=200),
                       x_session_id: str | None = Header(default=None, max_length=100)) -> dict:
     rate_limits.enforce("write", http, identity=user.user_id)
+    idle_reset.touched(changed=True)
     payload = issue.model_dump(mode="json")
     if x_execution_key:
         return _keyed(x_execution_key, x_session_id, user, ["update_issue", issue_id, payload],
@@ -334,6 +348,7 @@ def create_demo_project(project: ProjectInput, workspace_scope_id: str,
                         grant: RecordGrant = Depends(require_record_access),
                         idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
     rate_limits.enforce("write", http, identity=user.user_id)
+    idle_reset.touched(changed=True)
     require_scope(workspace_scope_id, grant)
     return product_data.save_project(project.model_dump(mode="json"), workspace_scope_id, idempotency_key)
 
@@ -345,6 +360,7 @@ def create_demo_cycle(cycle: CycleInput,
                       grant: RecordGrant = Depends(require_record_access),
                       idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
     rate_limits.enforce("write", http, identity=user.user_id)
+    idle_reset.touched(changed=True)
     # Cycles without a project are workspace-wide and reserved for record administrators.
     if cycle.projectId is None:
         require_record_admin(grant)
@@ -360,6 +376,7 @@ def create_demo_team_member(member: MemberInput, workspace_scope_id: str,
                             grant: RecordGrant = Depends(require_record_access),
                             idempotency_key: str | None = Header(default=None, max_length=200)) -> dict:
     rate_limits.enforce("write", http, identity=user.user_id)
+    idle_reset.touched(changed=True)
     require_scope(workspace_scope_id, grant)
     return product_data.save_team_member(member.model_dump(mode="json"), workspace_scope_id, idempotency_key)
 
@@ -388,6 +405,7 @@ def synthesize_speech(body: SpeechRequest, http: Request,
                       user: AuthUser = Depends(require_auth)) -> Response:
     """Every check runs before any budget is reserved or any provider is contacted."""
     rate_limits.enforce("speech", http, identity=user.user_id)
+    idle_reset.touched()
     try:
         access = authorize_product(user, body.product_id, agent.directory)
     except AccessDenied:
@@ -451,6 +469,7 @@ def usage_summary(day: str | None = None, user: AuthUser = Depends(require_membe
 def create_turn(request: TurnRequest, http: Request,
                 user: AuthUser = Depends(require_auth)) -> TurnResponse:
     rate_limits.enforce("turn", http, identity=user.user_id)
+    idle_reset.touched()
     try:
         authorize_product(user, request.product_id, agent.directory)
     except AccessDenied:
