@@ -388,7 +388,11 @@ export default function Home() {
         setCycles(demoData.cycles);
         setTeam(demoData.team);
         setWorkspaceScopes(demoData.workspaceScopes);
-        const nextScope = demoData.workspaceScopes[0] ?? demoWorkspaceScope;
+        // A fresh session starts where a fresh page load does: in the default workspace, when this
+        // visitor can see it. The first listed scope is only an order, not a starting point.
+        const nextScope = demoData.workspaceScopes.find((scope) => scope.id === demoWorkspaceScope.id)
+          ?? demoData.workspaceScopes[0]
+          ?? demoWorkspaceScope;
         workspaceScopeRef.current = nextScope;
         setWorkspaceScope(nextScope);
         setDraftPrefill({});

@@ -468,6 +468,22 @@ test("runs suggested demo turns and resets to a fresh session", async ({ page })
   await expect(page.getByTestId("source-list")).toBeHidden();
 });
 
+test("reset returns to the default workspace, where the guided prompts apply", async ({ page }) => {
+  // The public visitor sees both workspaces, and the platform lists Platform first. Reset used to
+  // land there, so "Open Maya's ticket" failed after every reset on the live demo.
+  await openApp(page);
+  await expect(page.getByTestId("workspace-switcher")).toHaveValue("workspace-product-eng");
+  await page.getByTestId("workspace-switcher").selectOption("workspace-platform");
+  await expect(page.getByTestId("workspace-switcher")).toHaveValue("workspace-platform");
+
+  await page.getByTestId("reset-demo").click();
+  await expect(page.getByTestId("turn-status")).toHaveText("Ready");
+  await expect(page.getByTestId("workspace-switcher")).toHaveValue("workspace-product-eng");
+
+  await sendChat(page, "open ticket for maya");
+  await expect(page.getByTestId("selected-issue-id")).toHaveText("LIN-142");
+});
+
 test("reset starts a fresh conversation and never resets shared demo data", async ({ page }) => {
   // Demo data is shared by every visitor. The public page may only restart its own conversation;
   // restoring the data is an operator action on the server.
