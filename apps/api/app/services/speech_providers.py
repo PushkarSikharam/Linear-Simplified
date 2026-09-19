@@ -40,25 +40,43 @@ class SpeechProvider(Protocol):
     def synthesize(self, text: str) -> SynthesizedSpeech: ...
 
 
+SPEECH_PROVIDER_NAMES = ("azure", "gemini", "openai")
+# Azure alone speaks unless another voice is listed on purpose. A configured key is not consent:
+# the Gemini key is also the reasoning key, and a second voice mid-conversation is a different
+# person, not a fallback. When Azure cannot answer, the browser's own voice takes over for free.
+DEFAULT_SPEECH_PROVIDERS = ("azure",)
+
+
+def speech_provider_names() -> list[str]:
+    """The cloud voices allowed to speak, in order (`PIXEL_SPEECH_PROVIDERS`, comma-separated)."""
+    listed = env_value("PIXEL_SPEECH_PROVIDERS")
+    names = [name.strip().lower() for name in listed.split(",")] if listed else DEFAULT_SPEECH_PROVIDERS
+    return [name for name in dict.fromkeys(names) if name in SPEECH_PROVIDER_NAMES]
+
+
 def configured_speech_providers(owner: ProductContext, voice_style: str) -> list[SpeechProvider]:
-    """Providers in fallback order for one product.
+    """Providers in fallback order for one product: the allowed voices that have credentials.
 
     `voice_style` comes from the product's pinned definition. Credentials and voices still
     come from deployment configuration; `owner` is the seam for per-product provider settings.
     """
     providers: list[SpeechProvider] = []
-    azure_key, azure_region = env_value("AZURE_SPEECH_KEY"), env_value("AZURE_SPEECH_REGION")
-    if azure_key and azure_region:
-        providers.append(AzureSpeech(
-            key=azure_key,
-            region=azure_region,
-            voice=env_value("AZURE_SPEECH_VOICE_NAME") or "en-US-AvaMultilingualNeural",
-            output_format=env_value("AZURE_SPEECH_OUTPUT_FORMAT") or "audio-24khz-48kbitrate-mono-mp3",
-        ))
-    if gemini_key := env_value("GEMINI_API_KEY"):
-        providers.append(GeminiSpeech(key=gemini_key, style=voice_style))
-    if openai_key := env_value("OPENAI_API_KEY"):
-        providers.append(OpenAISpeech(key=openai_key))
+    for name in speech_provider_names():
+        if name == "azure":
+            azure_key, azure_region = env_value("AZURE_SPEECH_KEY"), env_value("AZURE_SPEECH_REGION")
+            if azure_key and azure_region:
+                providers.append(AzureSpeech(
+                    key=azure_key,
+                    region=azure_region,
+                    voice=env_value("AZURE_SPEECH_VOICE_NAME") or "en-US-AvaMultilingualNeural",
+                    output_format=env_value("AZURE_SPEECH_OUTPUT_FORMAT") or "audio-24khz-48kbitrate-mono-mp3",
+                ))
+        elif name == "gemini":
+            if gemini_key := env_value("GEMINI_API_KEY"):
+                providers.append(GeminiSpeech(key=gemini_key, style=voice_style))
+        elif name == "openai":
+            if openai_key := env_value("OPENAI_API_KEY"):
+                providers.append(OpenAISpeech(key=openai_key))
     return providers
 
 

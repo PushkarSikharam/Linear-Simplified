@@ -109,6 +109,14 @@ is exhausted. The daily budgets in `.env.example` bound the cost, and the limits
 rate. Concurrency limits and spending alerts are **not built yet**; until they are, this
 deployment is a demo, not a production service.
 
+### Voice
+
+Edith speaks with Azure Speech (`en-US-AvaMultilingualNeural`, chat style) and nothing else:
+`PIXEL_SPEECH_PROVIDERS` defaults to `azure`. The Gemini key stays configured for reasoning but is
+never used as a voice unless that setting lists it. When Azure cannot answer (for example, the
+free tier's monthly allowance is used up), the page falls back to the browser's own voice, which
+costs nothing. The Azure resource is on the free (F0) tier.
+
 ### Backups: not in place
 
 The SQLite database on the volume has no backups. Before any real pilot we need scheduled,

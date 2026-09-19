@@ -31,6 +31,7 @@ import { checkAgentService, type AgentServiceStatus } from "@/lib/service-health
 import { useRecordSubmit, type CreateRecord } from "@/lib/use-record-submit";
 import { HybridVoiceEngine, VoiceEngineMode, VoiceEngineStatus } from "@/lib/hybrid-voice-engine";
 import type { SpectrumData } from "@/lib/voice-analyzer";
+import { isEchoOfAgent } from "@/lib/voice-echo";
 import { voiceModeLabel } from "@/lib/voice-labels";
 import type {
   DemoAction,
@@ -2985,6 +2986,7 @@ function ConversationCard({
   const mockVoiceTimerRef = useRef<number | null>(null);
   const isSubmittingVoiceRef = useRef(false);
   const isAgentSpeakingRef = useRef(false);
+  const recentAgentRepliesRef = useRef<string[]>([]);
   const isVoiceActive = voiceEngineStatus !== "Idle" && voiceEngineStatus !== "Error";
   const isServiceReady = agentServiceStatus === "ready";
 
@@ -3030,24 +3032,9 @@ function ConversationCard({
       onUserTranscript: (text, isFinal) => {
         if (isAgentSpeakingRef.current || isSubmittingVoiceRef.current) return;
 
-        // Discard any mic transcript that captured Edith's own greeting or response text
-        const lower = text.toLowerCase().trim();
-        const selfEchoKeywords = [
-          "welcome",
-          "pixel",
-          "edith",
-          "guide to planning",
-          "planning work",
-          "tracking tickets",
-          "connecting your",
-          "what brought you",
-          "check us out",
-          "created pix-",
-          "assigned it to",
-          "i'll open",
-          "i found"
-        ];
-        if (selfEchoKeywords.some((kw) => lower.includes(kw))) {
+        // Discard a transcript only when it repeats what Edith just said: her voice coming back
+        // through the microphone. Real questions that share her words must still go through.
+        if (isEchoOfAgent(text, recentAgentRepliesRef.current)) {
           return;
         }
 
@@ -3149,6 +3136,8 @@ function ConversationCard({
     source: InputMode,
     onEnded?: () => void
   ): Promise<void> {
+    // The two most recent replies are what the microphone could still be hearing.
+    recentAgentRepliesRef.current = [speech, ...recentAgentRepliesRef.current].slice(0, 2);
     if (typeof window !== "undefined") {
       const speechWindow = window as SpeechRecognitionWindow;
       speechWindow.__spokenAgentReplies = [

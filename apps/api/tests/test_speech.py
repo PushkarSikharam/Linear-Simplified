@@ -178,12 +178,37 @@ class SpeechProvidersTest(LedgerFixture):
             with self.assertRaises(http_client.ExternalCallBlocked):
                 provider.synthesize("Hello")
 
-    def test_configured_providers_follow_fallback_order(self):
+    def test_azure_alone_speaks_by_default_even_with_other_keys_configured(self):
+        """The Gemini key also drives reasoning; holding it is not permission to voice Edith."""
         os.environ.update({"AZURE_SPEECH_KEY": "a", "AZURE_SPEECH_REGION": "eastus",
                            "GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"})
+        os.environ.pop("PIXEL_SPEECH_PROVIDERS", None)
         providers = configured_speech_providers(self.tenant, "Speak warmly.")
-        self.assertEqual([provider.name for provider in providers], ["azure", "gemini", "openai"])
-        self.assertEqual(providers[1].style, "Speak warmly.")
+        self.assertEqual([provider.name for provider in providers], ["azure"])
+
+    def test_without_azure_credentials_no_cloud_voice_speaks(self):
+        """The browser's own voice takes over; no other paid voice steps in."""
+        os.environ.update({"GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"})
+        for name in ("AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "PIXEL_SPEECH_PROVIDERS"):
+            os.environ.pop(name, None)
+        self.assertEqual(configured_speech_providers(self.tenant, "Speak warmly."), [])
+
+    def test_listed_providers_follow_the_listed_order(self):
+        os.environ.update({"AZURE_SPEECH_KEY": "a", "AZURE_SPEECH_REGION": "eastus",
+                           "GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"})
+        cases = {
+            "azure,gemini,openai": ["azure", "gemini", "openai"],
+            "openai, Azure": ["openai", "azure"],
+            "azure,azure,unknown": ["azure"],
+        }
+        for listed, expected in cases.items():
+            with self.subTest(listed=listed):
+                os.environ["PIXEL_SPEECH_PROVIDERS"] = listed
+                providers = configured_speech_providers(self.tenant, "Speak warmly.")
+                self.assertEqual([provider.name for provider in providers], expected)
+        os.environ["PIXEL_SPEECH_PROVIDERS"] = "gemini"
+        self.assertEqual(configured_speech_providers(self.tenant, "Speak warmly.")[0].style,
+                         "Speak warmly.")
 
     def test_azure_escapes_text_into_ssml(self):
         ssml = AzureSpeech("k", "eastus", "en-US-AvaMultilingualNeural", "fmt").ssml('<break/> & "quotes"')
