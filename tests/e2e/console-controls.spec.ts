@@ -54,6 +54,7 @@ async function standIn(page: Page, seen: Seen) {
     const method = request.method();
     seen.requests += 1;
     if (path === "/account/session") return route.fulfill({ json: SESSION });
+    if (path === "/account/sign-in-mode") return route.fulfill({ json: { mode: "code" } });
     if (path === "/account/logout") return route.fulfill({ status: 204, body: "" });
     if (path === "/organizations/private/products" && method === "GET") return route.fulfill({ json: { products: [{
       product_id: "board", name: "Board", team_id: "default", definition_id: "board", definition_version: 1, state: "active",

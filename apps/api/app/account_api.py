@@ -35,6 +35,15 @@ DEFAULT_ORGANIZATION_NAME = "My organization"
 DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME = "default", "My team"
 DEPLOYMENT_CODES_PER_HOUR = 5000
 DEPLOYMENT_BUCKET = "deployment"
+# What an address has to look like before anything is done with it. Deliberately narrow on
+# the characters that would let a header or a log line be forged, and permissive otherwise.
+EMAIL_PATTERN = r"[^\s@<>\r\n]+@[^\s@<>\r\n]+\.[^\s@<>\r\n]+"
+# New workspaces the whole deployment will open in an hour when a code is not being asked
+# for. Nobody should ever meet this: it is here so that a script pointed at an open sign-in
+# cannot fill the database with organizations, and it counts only first-time addresses, so
+# somebody signing in again is never held up by it.
+OPEN_SIGN_IN_BUCKET = "open_sign_in"
+OPEN_SIGN_IN_WORKSPACES_PER_HOUR = 200
 router = APIRouter(prefix="/api/account", tags=["account"])
 # A week. Somebody using Pixel daily should sign in about as often as they sign in to anything
 # else they work in; a day meant closing the browser cost them their session. Revocation is what
@@ -66,6 +75,19 @@ def _settings() -> tuple[str, ...]:
     if env_value("PIXEL_ENGINE_MODE") != "definition":
         raise HTTPException(503, "Customer workspaces require the definition engine before sign-in can be enabled.")
     return values
+
+
+def open_sign_in_enabled() -> bool:
+    """Whether typing an address is enough to be let in, with nothing sent to prove it.
+
+    This exists so a deployment can be shown to a room of people who each need to be inside
+    their own workspace in one step, on hosting that cannot deliver mail. It is off unless
+    somebody turns it on, and it should stay off wherever anything real is kept: with it on
+    an address is a claim and not a fact, so whoever types an address gets that workspace,
+    and addresses stop being identity. Everything else about the account is unchanged - the
+    workspace, its products and its people are the same rows, and they persist the same way.
+    """
+    return env_bool("PIXEL_OPEN_SIGN_IN", default=False)
 
 
 def _digest(secret: str, text: str) -> str:
@@ -150,7 +172,7 @@ def send_code_with_resend_api(email: str, code: str, api_key: str, sender: str) 
 def request_code(body: EmailRequest, response: Response) -> dict:
     settings = _settings()
     email = body.email.strip().lower()
-    if not re.fullmatch(r"[^\s@<>\r\n]+@[^\s@<>\r\n]+\.[^\s@<>\r\n]+", email):
+    if not re.fullmatch(EMAIL_PATTERN, email):
         raise HTTPException(422, "Enter a valid email address.")
     now = time.time()
     challenge_id, code = secrets.token_hex(24), f"{secrets.randbelow(100000000):08d}"
@@ -229,6 +251,16 @@ def verify_code(body: CodeRequest, response: Response) -> dict:
                             "Ask whoever runs this Pixel for an invitation."
                             if proved_address else
                             "That code is not right, or it has expired. Ask for a new one.")
+    return _start_session(account, response)
+
+
+def _start_session(account, response: Response) -> dict:
+    """Turn a settled account into a browser session, however the person got here.
+
+    Both ways in end here, so there is one place where a session is minted, one place where a
+    suspended organization is turned away, and one place where the application's own product
+    is brought up to date - rather than a second copy of all three that can quietly drift.
+    """
     # Every sign-in, not only the first. Moving around Pixel is Pixel's own, so an organization
     # should be on the version the platform ships rather than the one that existed the day they
     # signed up; doing this only at registration left accounts years behind without a symptom
@@ -241,7 +273,8 @@ def verify_code(body: CodeRequest, response: Response) -> dict:
     except Exception:  # noqa: BLE001 - never block somebody signing in
         logger.exception("console_product_not_ensured", extra={"tenant_id": account["tenant_id"]})
     with get_connection() as connection:
-        organization = connection.execute("select state from organizations where tenant_id=?", (account["tenant_id"],)).fetchone()
+        organization = connection.execute("select state from organizations where tenant_id=?",
+                                          (account["tenant_id"],)).fetchone()
     if not organization or organization[0] != "active":
         raise HTTPException(403, "This account is unavailable.")
     token = create_token(account["user_id"], account["tenant_id"])
@@ -272,6 +305,63 @@ def _register(email: str) -> dict:
         logger.warning("organization_not_created")
         raise HTTPException(503, "Your workspace could not be created. Please try again.") from None
     return {"user_id": user_id, "tenant_id": tenant_id}
+
+
+@router.get("/sign-in-mode")
+def sign_in_mode(response: Response) -> dict:
+    """How this deployment lets somebody in, so the page can ask before it asks them to type.
+
+    Saying which mode is on discloses nothing - it is the same answer for everybody, and it
+    is plain from what the form does anyway. Asking first is what stops the page promising an
+    email that will never be sent, or a code that will never be wanted.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    if open_sign_in_enabled():
+        return {"mode": "open"}
+    try:
+        # The same check the code path makes, rather than a second copy of it that can drift.
+        _settings()
+    except HTTPException:
+        return {"mode": "disabled"}
+    return {"mode": "code"}
+
+
+@router.post("/sign-in")
+def open_sign_in(body: EmailRequest, response: Response) -> dict:
+    """Sign in with an address alone, when this deployment is set up that way.
+
+    A first address opens its own workspace; the same address later returns to the same one,
+    with its products, its people and its records where they were left. That is the whole
+    difference from the code path: what is skipped is the proof that the person typing holds
+    the inbox, not any part of what an account is.
+    """
+    if not open_sign_in_enabled():
+        raise HTTPException(403, "This Pixel sends a one-time code. Ask for one on the sign-in page.")
+    if env_value("PIXEL_ENGINE_MODE") != "definition":
+        raise HTTPException(503, "Customer workspaces require the definition engine before sign-in can be enabled.")
+    email = body.email.strip().lower()
+    if not re.fullmatch(EMAIL_PATTERN, email):
+        raise HTTPException(422, "Enter a valid email address.")
+    now, limited = time.time(), False
+    with get_connection() as connection:
+        connection.execute("begin immediate")
+        account = connection.execute("select * from email_accounts where email=?", (email,)).fetchone()
+        opening_a_workspace = account is None
+        if opening_a_workspace:
+            connection.execute("delete from email_login_limits where starts_at < ?", (now - 3600,))
+            row = connection.execute("select attempts from email_login_limits where bucket=?",
+                                     (OPEN_SIGN_IN_BUCKET,)).fetchone()
+            limited = bool(row) and row[0] >= OPEN_SIGN_IN_WORKSPACES_PER_HOUR
+            if not limited:
+                connection.execute("insert into email_login_limits values (?, ?, 1) "
+                                   "on conflict(bucket) do update set attempts=attempts+1",
+                                   (OPEN_SIGN_IN_BUCKET, now))
+    if limited:
+        raise HTTPException(429, "Too many new workspaces have been opened here in the last hour. "
+                                 "Please try again later.", headers={"Retry-After": "3600"})
+    if opening_a_workspace:
+        account = _register(email)
+    return _start_session(account, response)
 
 
 @router.get("/session")

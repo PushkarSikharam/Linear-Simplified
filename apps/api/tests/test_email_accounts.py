@@ -413,3 +413,111 @@ class SignInLimitsTest(EmailAccountsTest):
                 **self.bearer(session)})
         self.assertEqual(answered.status_code, 200, answered.text)
         self.assertIsNone(answered.json()["console_product_id"])
+
+
+class OpenSignInTest(EngineCutoverFixture):
+    """Signing in with an address alone, for a deployment that cannot send mail.
+
+    What is skipped here is the proof that the person typing holds the inbox. Nothing else about
+    an account changes, and these tests are mostly about that: a workspace opened this way is an
+    ordinary workspace, it is still nobody else's, and it is still there the next time.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Deliberately no mail settings at all. Open sign-in must not need the mail stack, since
+        # the whole reason to reach for it is that mail cannot be delivered from here.
+        opened = patch.dict(os.environ, {
+            "PIXEL_OPEN_SIGN_IN": "true", "PIXEL_ENGINE_MODE": "definition",
+            "PIXEL_SECURE_COOKIES": "false",
+        })
+        opened.start()
+        self.addCleanup(opened.stop)
+        mail = patch.object(account_api, "send_code")
+        self.mail = mail.start()
+        self.addCleanup(mail.stop)
+
+    def sign_in(self, email="manager@example.test"):
+        return self.client.post("/api/account/sign-in", json={"email": email})
+
+    def test_it_is_off_unless_somebody_turns_it_on(self):
+        """Nothing about a fresh deployment lets an unproven address in."""
+        with patch.dict(os.environ, {"PIXEL_OPEN_SIGN_IN": "false"}):
+            refused = self.sign_in()
+        self.assertEqual(refused.status_code, 403, refused.text)
+        self.assertIn("one-time code", refused.json()["detail"])
+        with db.get_connection() as connection:
+            self.assertEqual(connection.execute("select count(*) from email_accounts").fetchone()[0], 0)
+
+    def test_an_address_alone_opens_a_workspace_and_comes_back_to_it(self):
+        """The requirement this exists for: sign in, leave, sign in again, still your workspace."""
+        first = self.sign_in()
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertIn(SESSION_COOKIE, first.cookies)
+        self.assertIn(CSRF_COOKIE, first.cookies)
+        again = self.sign_in()
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertEqual(first.json()["tenant_id"], again.json()["tenant_id"])
+        self.assertEqual(first.json()["user_id"], again.json()["user_id"])
+
+    def test_two_addresses_are_two_private_workspaces(self):
+        mine = self.sign_in("mine@example.test").json()
+        theirs = self.sign_in("theirs@example.test").json()
+        self.assertNotEqual(mine["tenant_id"], theirs["tenant_id"])
+        reached = self.client.get(
+            f"/api/organizations/{mine['tenant_id']}/products",
+            headers={"Authorization": "Bearer " + create_token(theirs["user_id"], theirs["tenant_id"])})
+        self.assertEqual(reached.status_code, 404, "one workspace must not see another")
+
+    def test_nothing_is_emailed(self):
+        self.assertEqual(self.sign_in().status_code, 200)
+        self.mail.assert_not_called()
+
+    def test_a_workspace_can_be_worked_in_straight_away(self):
+        """A session from this path is an ordinary session, not a lesser one."""
+        session = self.sign_in().json()
+        answered = self.client.get("/api/account/session", headers={
+            "Authorization": "Bearer " + create_token(session["user_id"], session["tenant_id"])})
+        self.assertEqual(answered.status_code, 200, answered.text)
+        self.assertEqual(answered.json()["email"], "manager@example.test")
+        self.assertEqual(answered.json()["role"], "org_admin")
+
+    def test_a_nonsense_address_is_refused(self):
+        for typed in ("", "  ", "not-an-address", "who@example", "a b@example.test"):
+            self.assertIn(self.sign_in(typed).status_code, (422,), typed)
+
+    def test_it_still_requires_definition_authority(self):
+        """Open sign-in relaxes who may come in, never which engine owns their workspace."""
+        with patch.dict(os.environ, {"PIXEL_ENGINE_MODE": "legacy"}):
+            refused = self.sign_in()
+        self.assertEqual(refused.status_code, 503, refused.text)
+
+    def test_new_workspaces_are_capped_but_returning_people_are_not(self):
+        """A script pointed at this cannot fill the database, and nobody already in is held up."""
+        known = self.sign_in("known@example.test")
+        self.assertEqual(known.status_code, 200, known.text)
+        with patch.object(account_api, "OPEN_SIGN_IN_WORKSPACES_PER_HOUR", 1):
+            blocked = self.sign_in("a-stranger@example.test")
+            self.assertEqual(blocked.status_code, 429, blocked.text)
+            self.assertEqual(blocked.headers["Retry-After"], "3600")
+            returning = self.sign_in("known@example.test")
+        self.assertEqual(returning.status_code, 200, returning.text)
+        self.assertEqual(returning.json()["tenant_id"], known.json()["tenant_id"])
+
+    def test_the_page_is_told_which_way_in_this_deployment_uses(self):
+        self.assertEqual(self.client.get("/api/account/sign-in-mode").json()["mode"], "open")
+        with patch.dict(os.environ, {"PIXEL_OPEN_SIGN_IN": "false"}):
+            self.assertEqual(self.client.get("/api/account/sign-in-mode").json()["mode"], "disabled")
+            with patch.dict(os.environ, {
+                "PIXEL_EMAIL_LOGIN_ENABLED": "true", "PIXEL_AUTH_SECRET": "test-only-stable-secret",
+                "PIXEL_SMTP_HOST": "smtp.example.test", "PIXEL_SMTP_USER": "user",
+                "PIXEL_SMTP_PASSWORD": "password", "PIXEL_EMAIL_FROM": "noreply@example.test",
+            }):
+                self.assertEqual(self.client.get("/api/account/sign-in-mode").json()["mode"], "code")
+
+    def test_the_emailed_code_path_is_untouched_by_the_switch(self):
+        """Turning this on must not quietly weaken the deployment that does send codes."""
+        with patch.dict(os.environ, {"PIXEL_OPEN_SIGN_IN": "false"}):
+            self.assertEqual(self.client.post("/api/account/email-code",
+                                              json={"email": "a@example.test"}).status_code, 503)
+
