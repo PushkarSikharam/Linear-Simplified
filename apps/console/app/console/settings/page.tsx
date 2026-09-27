@@ -6,7 +6,22 @@ import { LogOut } from "lucide-react";
 import { useConsole } from "@pixel-console/components/console-context";
 import { useToast } from "@pixel-console/components/toast";
 import { Button, Field, Input, PageHead, Panel } from "@pixel-console/components/ui";
-import { endSession, renameOrganization, storedSession } from "@pixel-console/lib/pixel-api";
+import { endSession, renameOrganization, signInMode, storedSession, type SignInMode }
+  from "@pixel-console/lib/pixel-api";
+
+/**
+ * What signing in to this Pixel actually takes.
+ *
+ * This panel used to state flatly that a one-time code is emailed, which stops being true
+ * the moment a deployment is set to take an address on its own. Somebody reading their own
+ * account should not be told something about it that is not so, least of all about how it is
+ * protected, so the wording follows the deployment rather than being written into the page.
+ */
+const SIGN_IN_WORDS: Record<SignInMode, string> = {
+  code: "A one-time code sent to your email. There is no password to manage.",
+  open: "Your email address on its own. This Pixel is open for demonstration, so anyone who knows your address can open this workspace.",
+  disabled: "Sign-in is not switched on for this Pixel.",
+};
 
 const ROLE_WORDS: Record<string, string> = {
   org_admin: "Organization admin", team_admin: "Team admin", team_member: "Team member",
@@ -22,6 +37,13 @@ function LiveSettings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isAdmin = c.account?.role === "org_admin";
+  const [howSignInWorks, setHowSignInWorks] = useState<SignInMode | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    signInMode().then((found) => { if (current) setHowSignInWorks(found); }, () => {});
+    return () => { current = false; };
+  }, []);
 
   useEffect(() => { setName(current); }, [current]);
 
@@ -65,7 +87,7 @@ function LiveSettings() {
         <dl className="px-record-fields">
           <div><dt>Email</dt><dd>{c.account?.email ?? "Not set"}</dd></div>
           <div><dt>Role</dt><dd>{ROLE_WORDS[c.account?.role ?? ""] ?? c.account?.role}</dd></div>
-          <div><dt>Sign-in</dt><dd>A one-time code sent to your email. There is no password to manage.</dd></div>
+          <div><dt>Sign-in</dt><dd>{howSignInWorks ? SIGN_IN_WORDS[howSignInWorks] : "There is no password to manage."}</dd></div>
         </dl>
         <div className="px-row" style={{ marginTop: "var(--px-space-4)" }}>
           <Button onClick={() => { void endSession().then(() => router.push("/signed-out")); }}>

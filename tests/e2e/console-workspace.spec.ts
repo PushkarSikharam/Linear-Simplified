@@ -15,6 +15,7 @@ test("email sign-in never uses a shared demo identity", async ({ page }) => {
   await page.route("**/api/agent/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     requests.push(path);
+    if (path.endsWith("/account/sign-in-mode")) return route.fulfill({ json: { mode: "code" } });
     if (path.endsWith("/account/email-code")) {
       expect(route.request().postDataJSON()).toEqual({ email: "owner@example.test" });
       delivered = true;
@@ -43,6 +44,35 @@ test("email sign-in never uses a shared demo identity", async ({ page }) => {
   await expect(page.locator(".px-topbar")).toContainText("Private workspace");
   expect(requests.some((path) => path.includes("demo-login"))).toBe(false);
   await expect(page.getByRole("heading", { name: "No products yet", exact: true })).toBeVisible();
+});
+
+test("where this Pixel is open, an address alone is the whole sign-in", async ({ page }) => {
+  // A deployment that cannot deliver mail says so, and the page follows it: no code is asked
+  // for, nothing is emailed, and the address goes straight to the workspace it owns.
+  const requests: string[] = [];
+  await page.route("**/api/agent/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    requests.push(path);
+    if (path.endsWith("/account/sign-in-mode")) return route.fulfill({ json: { mode: "open" } });
+    if (path.endsWith("/account/sign-in")) {
+      expect(route.request().postDataJSON()).toEqual({ email: "manager@example.test" });
+      return route.fulfill({ json: { csrf_token: "test-csrf", user_id: "manager", tenant_id: "private" } });
+    }
+    if (path.endsWith("/account/session")) return route.fulfill({ json: {
+      user_id: "manager", email: "manager@example.test", tenant_id: "private",
+      organization_name: "Private workspace", role: "org_admin", team_id: null,
+      teams: [{ team_id: "default", name: "My team" }],
+    } });
+    if (path.endsWith("/products")) return route.fulfill({ json: { products: [] } });
+    return route.fulfill({ status: 404, json: { detail: "Unexpected test request" } });
+  });
+  await page.goto("/sign-in");
+  await page.getByLabel("Your email").fill("manager@example.test");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Welcome to Pixel", exact: true })).toBeVisible();
+  await expect(page.locator(".px-topbar")).toContainText("Private workspace");
+  expect(requests.some((path) => path.endsWith("/account/email-code"))).toBe(false);
+  expect(requests.some((path) => path.endsWith("/account/verify-code"))).toBe(false);
 });
 
 for (const mobile of [false, true]) {

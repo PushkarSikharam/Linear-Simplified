@@ -40,6 +40,21 @@ Do not enable the email flow without all of these server-side settings:
 - `PIXEL_ENGINE_MODE=definition` after its cutover checks; customer sign-in refuses legacy mode.
 - `PIXEL_SELF_SIGNUP_ENABLED=true` only when new verified users may create organizations.
 
+### Open sign-in, for demonstrations only
+
+`PIXEL_OPEN_SIGN_IN=true` lets an address in on its own, with nothing emailed to prove the
+person typing holds it. It needs none of the settings above, and it exists for hosting that
+cannot deliver mail. `GET /api/account/sign-in-mode` reports which way in a deployment uses, and
+the sign-in page and the account panel follow it rather than stating one of them.
+
+What it changes is only the proof. A first address still opens its own organization and default
+team, two addresses are still two private workspaces, and the same address still returns to the
+same workspace with its products, people and records. New workspaces are capped deployment-wide
+per hour; a returning address is never held up by that cap.
+
+What it costs: with it on, an address is a claim and not a fact, so whoever types an address
+gets that workspace. Leave it off wherever anything real is kept.
+
 No SMTP credentials have been provisioned, no real email has been sent in these tests, and no
 payment account has been provisioned. Synthetic administrator access remains blocked.
 The account currently uses the existing bearer-token transport and sessionStorage. A

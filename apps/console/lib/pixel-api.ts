@@ -162,6 +162,30 @@ export interface ApiAccount {
   teams: Array<{ team_id: string; name: string }>;
 }
 
+/**
+ * How this deployment lets somebody in.
+ *
+ * `code` emails a one-time code, `open` takes an address on its own, and `disabled` means
+ * sign-in is not configured here at all. The page asks before it asks anybody to type, so it
+ * never promises an email that will not be sent.
+ */
+export type SignInMode = "code" | "open" | "disabled";
+
+export async function signInMode(): Promise<SignInMode> {
+  const answer = await call<{ mode: string }>("/account/sign-in-mode");
+  return answer.mode === "open" || answer.mode === "disabled" ? answer.mode : "code";
+}
+
+/** Sign in with an address alone, where this deployment is set up that way. */
+export async function signInWithEmail(email: string): Promise<ApiSession> {
+  const answer = await call<{ csrf_token: string; user_id: string; tenant_id: string }>(
+    "/account/sign-in", { method: "POST", body: JSON.stringify({ email }) },
+  );
+  const session = { csrfToken: answer.csrf_token, userId: answer.user_id, tenantId: answer.tenant_id };
+  remember(session);
+  return session;
+}
+
 export async function requestEmailCode(email: string): Promise<{ challenge_id: string }> {
   return call("/account/email-code", { method: "POST", body: JSON.stringify({ email }) });
 }
