@@ -114,7 +114,7 @@ export default function ArchitecturePage() {
         </Link>
         <nav aria-label="Architecture navigation">
           <Link href="/console">Your workspace</Link>
-          <Link href="/demo">Guided demo</Link>
+          <Link href="/demo">Visit demo</Link>
           <a href="https://github.com/PushkarSikharam/Linear-Simplified">GitHub</a>
         </nav>
       </header>

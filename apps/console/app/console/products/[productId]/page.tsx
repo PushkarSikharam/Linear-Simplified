@@ -122,10 +122,20 @@ function LiveProductWorkspace({ productId }: { productId: string }) {
     setRecordFilter(action.capability === "FILTER_RECORDS" && action.entity && action.by ? { entity: action.entity, field: action.by, value: payload[action.by] } : null);
   }
 
+  // What the organization said this product is for, as the list already shows it. It comes from
+  // the same place, so the two screens cannot say different things about the same product.
+  const listed = c.visibleProducts.find((product) => product.id === productId);
+  const purpose = listed && !/^\d+ kinds? of record/.test(listed.description) ? listed.description : "";
+
   return (
     <>
       <PageHead title={shape.product_name}
-        description={`${countOf(shape.entities.length, "kind of record", "kinds of record")}, `
+        description={
+          // What somebody wrote about it first, and what Pixel can count about it after. The
+          // list and the assistant both lead with the sentence; this page led with the shape,
+          // which is the least interesting true thing about a product.
+          `${purpose ? `${purpose} ` : ""}`
+          + `${countOf(shape.entities.length, "kind of record", "kinds of record")}, `
           + `${countOf(shape.views.length, "screen", "screens")}. Version ${shape.definition_version}.`}
         actions={<StatusBadge status="active" />} />
       <div className="px-product-workspace">

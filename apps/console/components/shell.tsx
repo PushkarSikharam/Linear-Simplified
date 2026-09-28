@@ -55,7 +55,15 @@ export function Shell({ children }: { children: ReactNode }) {
   const [logoutError, setLogoutError] = useState<string | null>(null);
   // Only the most specific item is current: "Add a product" lives under "Products", and marking
   // both reads as two places at once.
-  const currentHref = NAV.flatMap((group) => group.items).map((item) => item.href)
+  // Somebody who may not add a product is not shown the way to one. The server refuses it
+  // either way; being offered it and then refused is a worse answer than not being offered.
+  const mayAddProducts = c.account === null
+    || c.account.role === "org_admin" || c.account.role === "team_admin";
+  const navigation = NAV.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => mayAddProducts || item.href !== "/console/products/new"),
+  })).filter((group) => group.items.length > 0);
+  const currentHref = navigation.flatMap((group) => group.items).map((item) => item.href)
     .filter((href) => pathname === href || (href !== "/console" && pathname.startsWith(`${href}/`)))
     .sort((a, b) => b.length - a.length)[0] ?? null;
 
@@ -86,7 +94,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="px-nav">
             <a className="px-nav-cta" href="/demo"><Monitor aria-hidden />Visit demo</a>
           </div>
-          {NAV.map((group) => (
+          {navigation.map((group) => (
             <div key={group.section} className="px-nav">
               <div className="px-nav-section">{group.section}</div>
               {group.items.map((item) => {

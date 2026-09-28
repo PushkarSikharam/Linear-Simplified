@@ -42,6 +42,7 @@ from app.engine.mentions import (
     person_search_words,
     record_ids,
     title_text,
+    without_assignment,
 )
 from app.engine.normalizer import NormalizedMessage, Normalizer, contains_term
 from app.engine.routing import RouteKind, RouteResult, RouteStage
@@ -753,7 +754,12 @@ class IntentRouter:
             else:
                 title, named_values = title_text(text.original), {}
             if entity is not None and title and entity.title_field in spec.fields:
-                fields[entity.title_field] = title
+                # Who it is for is a field, not part of what it is called - and that holds even
+                # where this product settles the assignment afterwards rather than now, because
+                # the alternative is a record permanently named after the person it is for.
+                named = person or (people.visible[0] if people.visible else None)
+                fields[entity.title_field] = without_assignment(
+                    title, named.name if named is not None else None)
             for name, values in named_values.items():
                 # A choice named once is taken; one named twice is left for the form to ask.
                 if len(values) == 1 and name not in fields:

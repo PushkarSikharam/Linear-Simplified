@@ -120,10 +120,22 @@ function GuidedProductOnboarding({ onAdvanced }: { onAdvanced?: () => void }) {
     }
   }
 
+  // Only an administrator may add a product, and the server is the one that decides. Saying so
+  // here as well is not a second opinion: it is saying it before somebody names their product,
+  // describes what it keeps, waits for Pixel to write it, reads it and accepts it - all of which
+  // used to happen before the refusal arrived, and all of which was then thrown away.
+  const mayAdd = c.account === null || c.account.role === "org_admin" || c.account.role === "team_admin";
+
   return (
     <>
       <PageHead title="Add a product" description="Start from a template or describe what your product keeps. Pixel turns it into screens, records and an assistant you can review before launch."
-        actions={onAdvanced ? <Button onClick={onAdvanced}>Advanced import</Button> : undefined} />
+        actions={onAdvanced && mayAdd ? <Button onClick={onAdvanced}>Advanced import</Button> : undefined} />
+      {!mayAdd ? (
+        <Alert tone="warn" title="You can't add products here">
+          Only an organization admin, or the admin of the team a product belongs to, can add one.
+          Ask one of them, and you will be able to use it as soon as it exists.
+        </Alert>
+      ) : (
       <div className="px-onboarding">
         <nav aria-label="Onboarding steps">
           <ol className="px-steps">
@@ -368,6 +380,7 @@ function GuidedProductOnboarding({ onAdvanced }: { onAdvanced?: () => void }) {
           )}
         </div>
       </div>
+      )}
     </>
   );
 }

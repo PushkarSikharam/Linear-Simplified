@@ -498,6 +498,28 @@ class OpenSignInTest(EngineCutoverFixture):
         self.assertEqual(self.client.post("/api/account/sign-in", json={
             "email": "nameless@example.test"}).status_code, 422)
 
+    def test_you_can_correct_your_own_name_and_only_your_own(self):
+        """A typo asked for once at sign-in needs somewhere to be fixed."""
+        mine = self.sign_in("mine@example.test", "Pria", "Ramn").json()
+        headers = {"Authorization": "Bearer " + create_token(mine["user_id"], mine["tenant_id"])}
+        saved = self.client.patch("/api/account/name", headers=headers,
+                                  json={"first_name": "Priya", "last_name": "Raman"})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["name"], "Priya Raman")
+        self.assertEqual(self.client.get("/api/account/session", headers=headers).json()["name"],
+                         "Priya Raman")
+        theirs = self.sign_in("theirs@example.test", "Sam", "Okafor").json()
+        unchanged = self.client.get("/api/account/session", headers={
+            "Authorization": "Bearer " + create_token(theirs["user_id"], theirs["tenant_id"])})
+        self.assertEqual(unchanged.json()["name"], "Sam Okafor")
+
+    def test_a_name_with_markup_in_it_is_refused(self):
+        mine = self.sign_in("careful@example.test").json()
+        refused = self.client.patch("/api/account/name", headers={
+            "Authorization": "Bearer " + create_token(mine["user_id"], mine["tenant_id"])},
+            json={"first_name": "<script>", "last_name": "Raman"})
+        self.assertEqual(refused.status_code, 422, refused.text)
+
     def test_a_returning_name_never_silently_replaces_the_one_on_record(self):
         """A typo on one sign-in must not change what colleagues have been calling somebody."""
         first = self.sign_in("steady@example.test", "Priya", "Raman").json()
