@@ -65,6 +65,7 @@ function LiveOverview() {
   const c = useConsole();
   const products = c.visibleProducts;
   const first = products.length === 0;
+  const mayAdd = c.account === null || c.account.role === "org_admin" || c.account.role === "team_admin";
 
   return <>
     <PageHead
@@ -72,8 +73,8 @@ function LiveOverview() {
       description={first
         ? "Pixel runs your products. Describe one, and Edith can answer about it, open its screens, and create and assign its records."
         : "Your products, and where to go next."}
-      actions={<Link className="px-button" data-variant="primary" href="/console/products/new">
-        <Plus aria-hidden />Add a product</Link>} />
+      actions={mayAdd ? <Link className="px-button" data-variant="primary" href="/console/products/new">
+        <Plus aria-hidden />Add a product</Link> : undefined} />
 
     {c.account?.role === "org_admin" && c.account.organization_name === "My organization" ? (
       <Alert title="Give your organization a name">
@@ -88,10 +89,16 @@ function LiveOverview() {
           <li>
             <strong>Describe your product.</strong> Tell Pixel what it keeps - deals, tickets,
             customers - and Pixel writes its definition for you to read before anything runs on it.
-            <div className="px-row" style={{ marginTop: 6 }}>
-              <Link className="px-button" data-variant="primary" href="/console/products/new">
-                <Plus aria-hidden />Add your first product</Link>
-            </div>
+            {mayAdd ? (
+              <div className="px-row" style={{ marginTop: 6 }}>
+                <Link className="px-button" data-variant="primary" href="/console/products/new">
+                  <Plus aria-hidden />Add your first product</Link>
+              </div>
+            ) : (
+              <div className="px-small px-muted" style={{ marginTop: 6 }}>
+                An organization admin adds products. You will be able to use them as soon as they exist.
+              </div>
+            )}
           </li>
           <li>
             <strong>See one that already works.</strong> The guided demo is a finished product
@@ -115,9 +122,11 @@ function LiveOverview() {
       ? <Link href="/console/products">All products</Link> : undefined}>
       {first ? (
         <EmptyState title="No products yet"
-          action={<Link className="px-button" data-variant="primary" href="/console/products/new">
-            <Plus aria-hidden />Add a product</Link>}>
-          Once you add one, it appears here and Edith can answer about it.
+          action={mayAdd ? <Link className="px-button" data-variant="primary" href="/console/products/new">
+            <Plus aria-hidden />Add a product</Link> : undefined}>
+          {mayAdd
+            ? "Once you add one, it appears here and Edith can answer about it."
+            : "Once an admin adds one, it appears here and Edith can answer about it."}
         </EmptyState>
       ) : <div className="px-table-wrap"><table className="px-table">
         <thead><tr><th>Product</th><th>What it is for</th><th>Version</th><th>Status</th></tr></thead>
@@ -135,7 +144,7 @@ function LiveOverview() {
     {first ? null : (
       <Panel title="Elsewhere in Pixel">
         <div className="px-row" style={{ flexWrap: "wrap" }}>
-          <Link className="px-button" data-px-control="add_product_button" href="/console/products/new"><Plus aria-hidden />Add a product</Link>
+          {mayAdd ? <Link className="px-button" data-px-control="add_product_button" href="/console/products/new"><Plus aria-hidden />Add a product</Link> : null}
           <Link className="px-button" href="/console/organization"><Users aria-hidden />People and teams</Link>
           <Link className="px-button" data-variant="primary" href="/demo"><PlayCircle aria-hidden />Visit demo</Link>
           <Link className="px-button" href="/architecture"><Network aria-hidden />How Pixel works</Link>

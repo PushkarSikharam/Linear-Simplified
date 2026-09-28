@@ -6,7 +6,7 @@ import { LogOut } from "lucide-react";
 import { useConsole } from "@pixel-console/components/console-context";
 import { useToast } from "@pixel-console/components/toast";
 import { Button, Field, Input, PageHead, Panel } from "@pixel-console/components/ui";
-import { endSession, renameOrganization, signInMode, storedSession, type SignInMode }
+import { changeOwnName, endSession, renameOrganization, signInMode, storedSession, type SignInMode }
   from "@pixel-console/lib/pixel-api";
 
 /**
@@ -38,6 +38,33 @@ function LiveSettings() {
   const [error, setError] = useState<string | null>(null);
   const isAdmin = c.account?.role === "org_admin";
   const [howSignInWorks, setHowSignInWorks] = useState<SignInMode | null>(null);
+  // Your own name, which everybody here sees and which the assistant answers with. It was
+  // asked for once, at sign-in, and then there was nowhere to correct a typo in it.
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  useEffect(() => {
+    setFirstName(c.account?.first_name ?? "");
+    setLastName(c.account?.last_name ?? "");
+  }, [c.account?.first_name, c.account?.last_name]);
+
+  async function saveName(event: React.FormEvent) {
+    event.preventDefault();
+    const first = firstName.trim();
+    const last = lastName.trim();
+    if (!first || !last) { setNameError("Enter your first and last name."); return; }
+    setSavingName(true); setNameError(null);
+    try {
+      const saved = await changeOwnName(first, last);
+      toast("ok", `You are now shown as ${saved.name}.`);
+      c.reloadProducts();
+    } catch (caught) {
+      setNameError(caught instanceof Error ? caught.message : "Your name could not be saved.");
+    } finally {
+      setSavingName(false);
+    }
+  }
 
   useEffect(() => {
     let current = true;
@@ -86,10 +113,30 @@ function LiveSettings() {
       </Panel>
       <Panel title="Your account">
         <dl className="px-record-fields">
+          <div><dt>Name</dt><dd>{c.account?.name ?? "Not set"}</dd></div>
           <div><dt>Email</dt><dd>{c.account?.email ?? "Not set"}</dd></div>
           <div><dt>Role</dt><dd>{ROLE_WORDS[c.account?.role ?? ""] ?? c.account?.role}</dd></div>
           <div><dt>Sign-in</dt><dd>{howSignInWorks ? SIGN_IN_WORDS[howSignInWorks] : "There is no password to manage."}</dd></div>
         </dl>
+        <form className="px-row" style={{ alignItems: "flex-end", flexWrap: "wrap", marginTop: "var(--px-space-4)" }}
+          onSubmit={saveName} noValidate>
+          <div style={{ flex: "0 1 160px" }}>
+            <Field label="First name" error={nameError}>{(f) => (
+              <Input id={f.id} describedBy={f.describedBy} invalid={f.invalid} value={firstName} maxLength={60}
+                onChange={(e) => { setFirstName(e.target.value); setNameError(null); }} />
+            )}</Field>
+          </div>
+          <div style={{ flex: "0 1 160px" }}>
+            <Field label="Last name">{(f) => (
+              <Input id={f.id} describedBy={f.describedBy} value={lastName} maxLength={60}
+                onChange={(e) => { setLastName(e.target.value); setNameError(null); }} />
+            )}</Field>
+          </div>
+          <Button type="submit" loading={savingName}
+            disabled={!firstName.trim() || !lastName.trim()
+              || (firstName.trim() === (c.account?.first_name ?? "") && lastName.trim() === (c.account?.last_name ?? ""))}>
+            Save your name</Button>
+        </form>
         <div className="px-row" style={{ marginTop: "var(--px-space-4)" }}>
           <Button onClick={() => { void endSession().then(() => router.push("/signed-out")); }}>
             <LogOut aria-hidden />Sign out</Button>

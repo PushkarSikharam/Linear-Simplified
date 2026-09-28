@@ -48,6 +48,20 @@ This is an implementation inventory, not a claim that the SaaS product is finish
   saying it does not know the caller offers a sign-in; anything else keeps the person where
   they are, says their session is intact, and offers to try again - and the session check is
   attempted twice before either conclusion.
+- A record is not named after the person it is for. The cue that names a new record runs to the
+  end of the message, so "called Fix the sign-in delay assigned to <somebody>" named the record
+  exactly that - in the product Pixel ships as well as in one it writes. A trailing phrase is
+  trimmed only when every word of it belongs to the person the request actually resolved.
+- A product Pixel writes no longer answers a request to create with a filter. Asking for
+  somebody's records and making a record for somebody share their words, and the filter was
+  winning: it found nothing, said so, and created nothing.
+- Adding a product is refused at the start rather than after the whole wizard. A person who may
+  not add one is told so before naming it, describing it and accepting what Pixel wrote, and is
+  not offered the way in from the navigation or the overview.
+- A promise to point at a control is kept or taken back. A screen only shows the controls its
+  viewer may use, so the assistant now says when the control it named is not on the screen for
+  them instead of leaving them looking for it.
+- Your own name can be corrected in Settings, which also shows it.
 - The separate guided demo remains at `/demo`.
 
 ## Required Configuration

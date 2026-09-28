@@ -122,6 +122,50 @@ def title_text(original: str) -> str | None:
     return subject[:1].upper() + subject[1:] if subject else None
 
 
+# Ways of saying who a new record is for. Longest and most specific first, because the last
+# two are ordinary English words that appear in plenty of titles and must only ever be read as
+# an assignment when what follows them is the person who was actually resolved.
+_ASSIGNMENT_CUES = (
+    "assigned to", "assigning to", "assign it to", "assign to",
+    "give it to", "gives it to", "given to", "give to",
+    "hand it to", "handed to", "handing to",
+    "owned by", "belonging to", "for", "to",
+)
+_CUE_LEAD_INS = (", and {cue} ", " and {cue} ", ", {cue} ", " {cue} ")
+
+
+def without_assignment(title: str, person_name: str | None) -> str:
+    """A title with its trailing "assigned to <person>" removed.
+
+    The cue that names a record runs to the end of the message, so "called Fix the sign-in
+    delay assigned to Ada Byron" named the record exactly that - the person was read correctly
+    and then left in the name as well, which is not what anybody meant and is not something they
+    can tidy up afterwards without renaming what they just made.
+
+    It only ever trims a phrase whose every word belongs to the person the request actually
+    resolved, so "called Coffee with friends" and "called Fix sign-in for the mobile group" keep
+    their whole names. Nothing is guessed: with nobody resolved, nothing is removed.
+    """
+    if not title or not person_name:
+        return title
+    theirs = {word for word in re.findall(r"[\w'-]+", person_name.lower())}
+    if not theirs:
+        return title
+    lowered = title.lower()
+    for cue in _ASSIGNMENT_CUES:
+        for shape in _CUE_LEAD_INS:
+            lead = shape.format(cue=cue)
+            at = lowered.rfind(lead)
+            if at <= 0:
+                continue
+            tail = re.findall(r"[\w'-]+", title[at + len(lead):].lower())
+            if tail and all(word in theirs for word in tail):
+                trimmed = title[:at].strip().strip(",").strip()
+                if trimmed:
+                    return trimmed
+    return title
+
+
 _DETAIL_SPLIT = re.compile(r"\s*(?:,|\bwith\b)\s+", re.IGNORECASE)
 _DETAIL_FILLER = frozenset({"and", "a", "an", "the", "to", "as", "set", "its", "it", "of", "is", "at", "in"})
 

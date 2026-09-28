@@ -228,7 +228,14 @@ export function EdithPanel({
         const control = action?.capability === "HIGHLIGHT_CONTROL" ? action.control : null;
         if (control) {
           if (route) router.push(route);
-          highlightControl(control);
+          // Said, then checked. A screen only shows the controls this person may use, so one
+          // that never appears is one their role does not have - and the promise to point at it
+          // has to be taken back rather than left hanging over an unchanged screen.
+          void highlightControl(control).then((found) => {
+            if (!found && alive.current) {
+              say("That control isn't on this screen for you - it may need an administrator.");
+            }
+          });
         }
         else if (record) router.push(record);
         else if (route && (!action || action.capability === "NAVIGATE_VIEW")) router.push(route);

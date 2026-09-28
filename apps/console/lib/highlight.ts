@@ -20,22 +20,34 @@ export function controlSelector(control: string): string {
   return `[data-px-control="${escape(control)}"]`;
 }
 
-export function highlightControl(control: string): void {
-  if (typeof document === "undefined" || !control) return;
-  let tries = 0;
-  const look = () => {
-    const found = document.querySelector<HTMLElement>(controlSelector(control));
-    if (!found) {
-      tries += 1;
-      if (tries < ATTEMPTS) window.setTimeout(look, ATTEMPT_PAUSE_MS);
-      return;
-    }
-    found.scrollIntoView({ block: "center", behavior: "smooth" });
-    found.classList.add(HIGHLIGHT_CLASS);
-    window.setTimeout(() => found.classList.remove(HIGHLIGHT_CLASS), HELD_MS);
-    // Focus as well as mark it: somebody who asked where a control is can then use it without
-    // reaching for the mouse, and a screen reader says what was found instead of nothing.
-    if (typeof found.focus === "function") found.focus({ preventScroll: true });
-  };
-  look();
+/**
+ * Resolves true when the control was found and marked, false when it never appeared.
+ *
+ * Whether it appeared matters to the caller. A screen shows the controls the person may use, so
+ * a control that is not there is usually one their role does not have - and having been told
+ * "I'll open People and teams and highlight Add a person", they should not then be left looking
+ * for a button that was never going to be on the page.
+ */
+export function highlightControl(control: string): Promise<boolean> {
+  if (typeof document === "undefined" || !control) return Promise.resolve(false);
+  return new Promise((settle) => {
+    let tries = 0;
+    const look = () => {
+      const found = document.querySelector<HTMLElement>(controlSelector(control));
+      if (!found) {
+        tries += 1;
+        if (tries < ATTEMPTS) window.setTimeout(look, ATTEMPT_PAUSE_MS);
+        else settle(false);
+        return;
+      }
+      found.scrollIntoView({ block: "center", behavior: "smooth" });
+      found.classList.add(HIGHLIGHT_CLASS);
+      window.setTimeout(() => found.classList.remove(HIGHLIGHT_CLASS), HELD_MS);
+      // Focus as well as mark it: somebody who asked where a control is can then use it without
+      // reaching for the mouse, and a screen reader says what was found instead of nothing.
+      if (typeof found.focus === "function") found.focus({ preventScroll: true });
+      settle(true);
+    };
+    look();
+  });
 }

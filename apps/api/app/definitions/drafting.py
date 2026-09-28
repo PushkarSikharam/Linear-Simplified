@@ -251,22 +251,23 @@ def draft_definition(draft: ProductDraft, owner_organization: str | None = None)
         # somebody's name identifies them, so it is given once and not renamed.
         settable = [name for name, spec in entities[thing.name]["fields"].items()
                     if spec["type"] != "refs"
-                    # Who owns it is decided after it exists: a create that demanded a person
-                    # would refuse to start until one was named.
                     and not (people is not None and spec.get("target") == people.name)]
+        # Who it is for, which can be said when it is made and changed afterwards.
+        owner_field = [name for name, spec in entities[thing.name]["fields"].items()
+                       if people is not None and spec.get("target") == people.name
+                       and spec["type"] == "ref"]
         if settable:
             create = f"create_{thing.name}"
             actions[create] = {"capability": "CREATE_RECORD", "entity": thing.name,
+                               # Who it is for is settled after it exists. Offering it here as
+                               # well would make a create with nothing else named ask who it is
+                               # for rather than what it is called, and a record needs a name
+                               # before it needs an owner.
                                "fields": settable,
                                "description": f"Add {_a(thing.label.lower())}.",
                                "confirm": True}
             intents.append({"action": create, "response": "record_created",
                             "match": [["add", "create", "new", "raise", "log"], words]})
-        # Who owns it is not asked for when it is made, but it is very much changeable
-        # afterwards: assigning work is a change of owner.
-        owner_field = [name for name, spec in entities[thing.name]["fields"].items()
-                       if people is not None and spec.get("target") == people.name
-                       and spec["type"] == "ref"]
         changeable = [name for name in [*settable, *owner_field]
                       if name != titles[thing.name]
                       and entities[thing.name]["fields"][name].get("editable", True)]
@@ -287,12 +288,18 @@ def draft_definition(draft: ProductDraft, owner_organization: str | None = None)
     if people:
         actions[f"{main.name}s_by_owner"] = {
             "capability": "FILTER_RECORDS", "entity": main.name, "by": "owner",
-            "description": f"Show every {main.label.lower()} one {people.label.lower()} owns.",
+            "description": f"Show one {people.label.lower()}'s {main.plural.lower()}.",
         }
         intents.append({"action": f"{main.name}s_by_owner", "requires": ["person"],
                         "response": "records_filtered",
                         "match": [["for", "owned by", "working on", "assigned to", "looking after"],
-                                  _words(main)]})
+                                  _words(main)],
+                        # Asking for somebody's records and making one for them share their
+                        # words. Without this, "add a client called Acme assigned to Priya" was
+                        # a request to create and was answered by filtering - it found nothing,
+                        # said so, and made nothing.
+                        "exclude": ["add", "create", "new", "raise", "log", "called", "named",
+                                    "titled"]})
 
     scope_paths = {main.name: []}
     for thing in draft.things:

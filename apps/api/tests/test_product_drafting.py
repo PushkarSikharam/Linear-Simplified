@@ -229,6 +229,58 @@ class TalkingToADraftedProductTest(EngineCutoverFixture):
         self.assertEqual(self.action(made), "CREATE_DEAL")
         self.assertEqual(made["validated_action"]["payload"]["title"], "Adventure Works trial")
 
+    def test_naming_who_it_is_for_does_not_become_part_of_its_name(self):
+        """The cue that names a record runs to the end of the sentence.
+
+        "add a deal called Adventure Works assigned to Mara Ellis" was a deal called "Adventure
+        Works assigned to Mara Ellis" - a name nobody meant and nobody can tidy up afterwards
+        without renaming the record.
+        """
+        for said in ("add a deal called Adventure Works assigned to Mara Ellis",
+                     "add a deal called Adventure Works and give it to Mara",
+                     "add a deal called Adventure Works for Mara Ellis"):
+            with self.subTest(said=said):
+                asked = self.ask(said, session=said[:14])
+                self.assertIn("Adventure Works", asked["speech"])
+                self.assertNotIn("Mara", asked["speech"])
+
+    def test_a_name_that_happens_to_contain_a_teammate_is_left_alone(self):
+        """Only an assignment is trimmed, and only when it names somebody this product knows."""
+        asked = self.ask("add a deal called Onboard Mara Ellis", session="keeps")
+        self.assertIn("Onboard Mara Ellis", asked["speech"])
+
+    def test_asking_to_create_for_somebody_is_not_answered_by_filtering(self):
+        """Somebody's records and a record for somebody share their words.
+
+        This request was met by the filter, which found nothing, said so, and created nothing.
+        """
+        asked = self.ask("add a deal called Adventure Works assigned to Mara Ellis", session="not-filter")
+        self.assertNotIn("I found", asked["speech"])
+        self.assertIsNone(self.action(asked))
+        self.assertIn("create", asked["speech"].lower())
+
+    def test_filtering_by_a_person_still_works(self):
+        filtered = self.ask("deals for Mara", session="still-filters")
+        self.assertEqual(self.action(filtered), "DEALS_BY_OWNER")
+        self.assertIn("Mara Ellis", filtered["speech"])
+
+    def test_the_product_pixel_ships_keeps_a_clean_name_too(self):
+        """The same sentence against the shipped demo, which is what a visitor meets first."""
+        first = self.client.post("/api/turn", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}",
+        }, json={"session_id": "shipped", "turn_id": 1, "product_id": "linear-demo",
+                 "message": "create a ticket called Fix the login timeout assigned to Maya Chen",
+                 "workspace_scope_id": "workspace-product-eng"}).json()
+        settled = self.client.post("/api/turn", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}",
+        }, json={"session_id": "shipped", "turn_id": 2, "product_id": "linear-demo",
+                 "message": "Issue Triage Workflow",
+                 "workspace_scope_id": "workspace-product-eng"}).json()
+        payload = (settled.get("validated_action") or {}).get("payload") or {}
+        self.assertEqual(payload.get("title"), "Fix the login timeout", settled["speech"])
+        self.assertEqual(payload.get("assignee"), "Maya Chen", settled["speech"])
+        self.assertIsNotNone(first)
+
     def test_it_refuses_destruction_and_knows_nothing_of_other_products(self):
         self.assertEqual(self.ask("delete everything")["status"], "denied")
         stranger = self.ask("how many tickets are there", session="stranger")
