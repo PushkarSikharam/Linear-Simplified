@@ -6,7 +6,9 @@ import { useEffect, useState } from "react";
 import { AuthCard } from "@pixel-console/components/auth-card";
 import { Alert, Button, Field, Input } from "@pixel-console/components/ui";
 import { INVALID_EMAIL, normalizeEmail } from "@pixel-console/lib/email";
-import { requestEmailCode, signInMode, signInWithEmail, type SignInMode } from "@pixel-console/lib/pixel-api";
+import {
+  requestEmailCode, signInMode, signInWithEmail, signUpWithEmail, type SignInMode,
+} from "@pixel-console/lib/pixel-api";
 
 /**
  * A deployment either emails a one-time code or takes an address on its own, and only the server
@@ -16,7 +18,7 @@ import { requestEmailCode, signInMode, signInWithEmail, type SignInMode } from "
  */
 const DESCRIPTION: Record<SignInMode, string> = {
   code: "We'll email you a one-time code. There is no password, and if you have not been here before this makes you a workspace of your own.",
-  open: "Tell us who you are. There is no code and no password, and if you have not been here before this makes you a workspace of your own - come back to the same address and your products and people are where you left them.",
+  open: "Use your email to return to your workspace. New here? Create a workspace first, then this same email brings you back to it.",
   disabled: "Sign-in is not switched on for this Pixel yet.",
 };
 
@@ -26,6 +28,7 @@ export default function SignIn() {
   const [email, setEmail] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [openFlow, setOpenFlow] = useState<"sign-in" | "sign-up">("sign-in");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
@@ -46,13 +49,16 @@ export default function SignIn() {
     setSending(true);
     try {
       if (mode === "open") {
-        // Their name is asked for here because an open deployment sends nothing and has no other
-        // moment to ask. Without it a workspace knows an address and nobody's name, and the
-        // assistant answers "who is in my organization" by reading an address aloud.
-        const first = firstName.trim();
-        const last = lastName.trim();
-        if (!first || !last) { setError("Enter your first and last name."); setSending(false); return; }
-        await signInWithEmail(address, first, last);
+        if (openFlow === "sign-up") {
+          // A new workspace needs a human name from the start. A returning workspace does not:
+          // its name, products and records are already on the account.
+          const first = firstName.trim();
+          const last = lastName.trim();
+          if (!first || !last) { setError("Enter your first and last name."); setSending(false); return; }
+          await signUpWithEmail(address, first, last);
+        } else {
+          await signInWithEmail(address);
+        }
         router.replace("/console");
         return;
       }
@@ -72,6 +78,18 @@ export default function SignIn() {
         ? <Alert tone="warn">Nobody can sign in here until whoever runs this Pixel turns sign-in on.</Alert>
         : <form className="px-stack" onSubmit={submit} noValidate>
             {mode === "open" ? (
+              <div className="px-row" aria-label="Sign-in choice">
+                <Button type="button" variant={openFlow === "sign-in" ? "primary" : "ghost"}
+                  onClick={() => { setOpenFlow("sign-in"); setError(null); }}>
+                  Sign in
+                </Button>
+                <Button type="button" variant={openFlow === "sign-up" ? "primary" : "ghost"}
+                  onClick={() => { setOpenFlow("sign-up"); setError(null); }}>
+                  Create account
+                </Button>
+              </div>
+            ) : null}
+            {mode === "open" && openFlow === "sign-up" ? (
               <div className="px-row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 140px" }}>
                   <Field label="First name">{(f) => (
@@ -92,7 +110,7 @@ export default function SignIn() {
                 autoFocus={mode !== "open"} value={email} onChange={(e) => { setEmail(e.target.value); setError(null); }} />
             )}</Field>
             <Button type="submit" variant="primary" loading={sending} disabled={mode === null}>
-              {mode === "open" ? "Continue" : "Email me a code"}
+              {mode === "open" ? (openFlow === "sign-up" ? "Create workspace" : "Sign in") : "Email me a code"}
             </Button>
           </form>}
     </AuthCard>

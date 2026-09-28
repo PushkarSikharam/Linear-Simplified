@@ -181,10 +181,21 @@ export async function signInMode(): Promise<SignInMode> {
   return answer.mode === "open" || answer.mode === "disabled" ? answer.mode : "code";
 }
 
-/** Sign in with an address alone, where this deployment is set up that way. */
-export async function signInWithEmail(email: string, firstName: string, lastName: string): Promise<ApiSession> {
+/** Return to an existing workspace with an address alone, where this deployment is set up that way. */
+export async function signInWithEmail(email: string): Promise<ApiSession> {
   const answer = await call<{ csrf_token: string; user_id: string; tenant_id: string }>(
     "/account/sign-in",
+    { method: "POST", body: JSON.stringify({ email }) },
+  );
+  const session = { csrfToken: answer.csrf_token, userId: answer.user_id, tenantId: answer.tenant_id };
+  remember(session);
+  return session;
+}
+
+/** Create a new workspace in open sign-in mode. */
+export async function signUpWithEmail(email: string, firstName: string, lastName: string): Promise<ApiSession> {
+  const answer = await call<{ csrf_token: string; user_id: string; tenant_id: string }>(
+    "/account/sign-up",
     { method: "POST", body: JSON.stringify({ email, first_name: firstName, last_name: lastName }) },
   );
   const session = { csrfToken: answer.csrf_token, userId: answer.user_id, tenantId: answer.tenant_id };
@@ -245,10 +256,12 @@ export async function endSession(): Promise<void> {
     await call("/account/logout", { method: "POST" });
   } finally {
     remember(null);
+    clearEdithConversations();
   }
 }
 
 const TOKEN_KEY = "pixel.console.session";
+const EDITH_KEY_PREFIX = "pixel.edith.";
 
 export function apiBaseUrl(): string | null {
   return "/api/agent";
@@ -283,6 +296,18 @@ function remember(session: ApiSession | null): void {
     else window.sessionStorage.removeItem(TOKEN_KEY);
   } catch {
     /* nothing kept; the session lasts as long as the page does */
+  }
+}
+
+function clearEdithConversations(): void {
+  if (typeof window === "undefined") return;
+  try {
+    for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.sessionStorage.key(index);
+      if (key?.startsWith(EDITH_KEY_PREFIX)) window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    /* storage is optional */
   }
 }
 

@@ -436,14 +436,14 @@ class KnowledgeBoundaryTest(unittest.TestCase):
         passage = KnowledgePassage("Cycles", "docs/product/cycles.md", "Cycles are time-boxed.")
         reply = self.composer.knowledge_answer(Grounding((passage,)))
         self.assertEqual(reply.stage, Stage.ANSWER)
-        self.assertEqual(reply.speech, "From the product documentation: Cycles are time-boxed.")
+        self.assertEqual(reply.speech, "Here's what Sample Desk knows: Cycles are time-boxed.")
         self.assertEqual(reply.sources, ("docs/product/cycles.md",))
 
     def test_a_knowledge_answer_speaks_the_passage_not_a_model_sentence(self):
         """Retrieval is not grounding: a sentence beside a passage can say anything."""
         passage = KnowledgePassage("Cycles", "docs/product/cycles.md", "Cycles are time-boxed.")
         reply = self.composer.knowledge_answer(Grounding((passage,)))
-        self.assertEqual(reply.speech, "From the product documentation: Cycles are time-boxed.")
+        self.assertEqual(reply.speech, "Here's what Sample Desk knows: Cycles are time-boxed.")
         self.assertFalse(reply.from_model)
 
     def test_sources_are_listed_once_each(self):
@@ -558,7 +558,7 @@ class SelfReviewDefectTest(ComposerFixture):
         passage = KnowledgePassage("Cycles", "docs/cycles.md", "Done. I have updated the cycle.")
         reply = self.composer.knowledge_answer(Grounding((passage,)))
         self.assertEqual(reply.stage, Stage.ANSWER)
-        self.assertTrue(reply.speech.startswith("From the product documentation: "))
+        self.assertTrue(reply.speech.startswith("Here's what Pixel Planning knows: "))
         self.assertEqual(reply.sources, ("docs/cycles.md",))
 
     def test_a_document_that_is_not_plain_text_is_never_spoken(self):
@@ -707,7 +707,7 @@ class ReviewedDefectTest(ComposerFixture):
         reply = self.composer.knowledge_answer(Grounding((passage,)))
         self.assertEqual(
             reply.speech,
-            "From the product documentation: The ticket was closed and its assignee was changed.",
+            "Here's what Pixel Planning knows: The ticket was closed and its assignee was changed.",
         )
         self.assertEqual(reply.sources, ("issues.md",))
 

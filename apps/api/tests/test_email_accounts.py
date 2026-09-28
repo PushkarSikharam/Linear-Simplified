@@ -439,9 +439,12 @@ class OpenSignInTest(EngineCutoverFixture):
         self.mail = mail.start()
         self.addCleanup(mail.stop)
 
-    def sign_in(self, email="manager@example.test", first_name="Priya", last_name="Raman"):
-        return self.client.post("/api/account/sign-in", json={
+    def sign_up(self, email="manager@example.test", first_name="Priya", last_name="Raman"):
+        return self.client.post("/api/account/sign-up", json={
             "email": email, "first_name": first_name, "last_name": last_name})
+
+    def sign_in(self, email="manager@example.test"):
+        return self.client.post("/api/account/sign-in", json={"email": email})
 
     def test_it_is_off_unless_somebody_turns_it_on(self):
         """Nothing about a fresh deployment lets an unproven address in."""
@@ -454,7 +457,7 @@ class OpenSignInTest(EngineCutoverFixture):
 
     def test_an_address_alone_opens_a_workspace_and_comes_back_to_it(self):
         """The requirement this exists for: sign in, leave, sign in again, still your workspace."""
-        first = self.sign_in()
+        first = self.sign_up()
         self.assertEqual(first.status_code, 200, first.text)
         self.assertIn(SESSION_COOKIE, first.cookies)
         self.assertIn(CSRF_COOKIE, first.cookies)
@@ -464,8 +467,8 @@ class OpenSignInTest(EngineCutoverFixture):
         self.assertEqual(first.json()["user_id"], again.json()["user_id"])
 
     def test_two_addresses_are_two_private_workspaces(self):
-        mine = self.sign_in("mine@example.test").json()
-        theirs = self.sign_in("theirs@example.test").json()
+        mine = self.sign_up("mine@example.test").json()
+        theirs = self.sign_up("theirs@example.test").json()
         self.assertNotEqual(mine["tenant_id"], theirs["tenant_id"])
         reached = self.client.get(
             f"/api/organizations/{mine['tenant_id']}/products",
@@ -473,12 +476,12 @@ class OpenSignInTest(EngineCutoverFixture):
         self.assertEqual(reached.status_code, 404, "one workspace must not see another")
 
     def test_nothing_is_emailed(self):
-        self.assertEqual(self.sign_in().status_code, 200)
+        self.assertEqual(self.sign_up().status_code, 200)
         self.mail.assert_not_called()
 
     def test_a_workspace_can_be_worked_in_straight_away(self):
         """A session from this path is an ordinary session, not a lesser one."""
-        session = self.sign_in().json()
+        session = self.sign_up().json()
         answered = self.client.get("/api/account/session", headers={
             "Authorization": "Bearer " + create_token(session["user_id"], session["tenant_id"])})
         self.assertEqual(answered.status_code, 200, answered.text)
@@ -488,19 +491,20 @@ class OpenSignInTest(EngineCutoverFixture):
     def test_a_nonsense_address_is_refused(self):
         for typed in ("", "  ", "not-an-address", "who@example", "a b@example.test"):
             self.assertIn(self.sign_in(typed).status_code, (422,), typed)
+            self.assertIn(self.sign_up(typed).status_code, (422,), typed)
 
     def test_a_workspace_is_opened_in_somebodys_name(self):
         """An open deployment sends nothing, so this is the only moment it can ask who they are."""
-        session = self.sign_in("priya@example.test").json()
+        session = self.sign_up("priya@example.test").json()
         answered = self.client.get("/api/account/session", headers={
             "Authorization": "Bearer " + create_token(session["user_id"], session["tenant_id"])})
         self.assertEqual(answered.json()["name"], "Priya Raman")
         self.assertEqual(self.client.post("/api/account/sign-in", json={
-            "email": "nameless@example.test"}).status_code, 422)
+            "email": "nameless@example.test"}).status_code, 404)
 
     def test_you_can_correct_your_own_name_and_only_your_own(self):
         """A typo asked for once at sign-in needs somewhere to be fixed."""
-        mine = self.sign_in("mine@example.test", "Pria", "Ramn").json()
+        mine = self.sign_up("mine@example.test", "Pria", "Ramn").json()
         headers = {"Authorization": "Bearer " + create_token(mine["user_id"], mine["tenant_id"])}
         saved = self.client.patch("/api/account/name", headers=headers,
                                   json={"first_name": "Priya", "last_name": "Raman"})
@@ -508,13 +512,13 @@ class OpenSignInTest(EngineCutoverFixture):
         self.assertEqual(saved.json()["name"], "Priya Raman")
         self.assertEqual(self.client.get("/api/account/session", headers=headers).json()["name"],
                          "Priya Raman")
-        theirs = self.sign_in("theirs@example.test", "Sam", "Okafor").json()
+        theirs = self.sign_up("theirs@example.test", "Sam", "Okafor").json()
         unchanged = self.client.get("/api/account/session", headers={
             "Authorization": "Bearer " + create_token(theirs["user_id"], theirs["tenant_id"])})
         self.assertEqual(unchanged.json()["name"], "Sam Okafor")
 
     def test_a_name_with_markup_in_it_is_refused(self):
-        mine = self.sign_in("careful@example.test").json()
+        mine = self.sign_up("careful@example.test").json()
         refused = self.client.patch("/api/account/name", headers={
             "Authorization": "Bearer " + create_token(mine["user_id"], mine["tenant_id"])},
             json={"first_name": "<script>", "last_name": "Raman"})
@@ -522,8 +526,9 @@ class OpenSignInTest(EngineCutoverFixture):
 
     def test_a_returning_name_never_silently_replaces_the_one_on_record(self):
         """A typo on one sign-in must not change what colleagues have been calling somebody."""
-        first = self.sign_in("steady@example.test", "Priya", "Raman").json()
-        self.sign_in("steady@example.test", "Pria", "Ramn")
+        first = self.sign_up("steady@example.test", "Priya", "Raman").json()
+        self.assertEqual(self.sign_up("steady@example.test", "Pria", "Ramn").status_code, 409)
+        self.assertEqual(self.sign_in("steady@example.test").status_code, 200)
         answered = self.client.get("/api/account/session", headers={
             "Authorization": "Bearer " + create_token(first["user_id"], first["tenant_id"])})
         self.assertEqual(answered.json()["name"], "Priya Raman")
@@ -536,10 +541,10 @@ class OpenSignInTest(EngineCutoverFixture):
 
     def test_new_workspaces_are_capped_but_returning_people_are_not(self):
         """A script pointed at this cannot fill the database, and nobody already in is held up."""
-        known = self.sign_in("known@example.test")
+        known = self.sign_up("known@example.test")
         self.assertEqual(known.status_code, 200, known.text)
         with patch.object(account_api, "OPEN_SIGN_IN_WORKSPACES_PER_HOUR", 1):
-            blocked = self.sign_in("a-stranger@example.test")
+            blocked = self.sign_up("a-stranger@example.test")
             self.assertEqual(blocked.status_code, 429, blocked.text)
             self.assertEqual(blocked.headers["Retry-After"], "3600")
             returning = self.sign_in("known@example.test")
