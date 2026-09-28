@@ -459,5 +459,129 @@ class NobodyIsLeftBehindTest(ConsoleAssistantFixture):
         self.assertIn("You have", caught_up)
 
 
+class KnowingTheOrganizationTest(ConsoleAssistantFixture):
+    """What Pixel can say about the organization it is running.
+
+    Everything here is read from the platform's own tables at the moment of the question. Nothing
+    is copied into a record store, so an answer cannot drift from what the organization actually
+    has - which is the only reason an assistant is allowed to answer a count at all.
+    """
+
+    def add_person(self, email: str, first_name: str, last_name: str,
+                   role: str = "team_member", team_id: str | None = None) -> dict:
+        body = {"email": email, "first_name": first_name, "last_name": last_name, "role": role}
+        if team_id is not None:
+            body["team_id"] = team_id
+        added = self.client.post(f"/api/organizations/{TENANT}/people", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}"}, json=body)
+        self.assertEqual(added.status_code, 201, added.text)
+        return added.json()
+
+    def test_people_are_named_rather_than_read_out_as_addresses(self):
+        self.add_person("maya@example.test", "Maya", "Chen")
+        self.add_person("sam@example.test", "Sam", "Okafor")
+        answered = self.ask("who is in my organization", session="who")["speech"]
+        self.assertIn("Maya Chen", answered)
+        self.assertIn("Sam Okafor", answered)
+        self.assertNotIn("@example.test", answered)
+
+    def test_asking_how_many_gets_a_number_and_asking_who_gets_the_names(self):
+        self.add_person("maya@example.test", "Maya", "Chen")
+        counted = self.ask("how many people are in my organization", session="count")["speech"]
+        self.assertIn("Maya", self.ask("who are they", session="count")["speech"])
+        self.assertNotIn("Maya", counted)
+
+    def test_the_console_lists_people_by_name(self):
+        added = self.add_person("maya@example.test", "Maya", "Chen")
+        listed = self.client.get(f"/api/organizations/{TENANT}/members", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}"}).json()
+        mine = next(m for m in listed["members"] if m["user_id"] == added["user_id"])
+        self.assertEqual(mine["name"], "Maya Chen")
+        self.assertEqual(mine["first_name"], "Maya")
+        self.assertEqual(mine["last_name"], "Chen")
+
+    def test_somebody_with_no_name_on_record_is_shown_by_address_not_as_a_blank(self):
+        """Accounts made before anybody was asked for a name are still people on the screen."""
+        listed = self.client.get(f"/api/organizations/{TENANT}/members", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}"}).json()
+        for member in listed["members"]:
+            self.assertTrue(member["name"], member)
+
+    def test_a_name_cannot_carry_markup_or_an_address(self):
+        for first, last in (("<script>", "Chen"), ("Maya", "a@b.test"), ("   ", "Chen")):
+            with self.subTest(first=first, last=last):
+                refused = self.client.post(f"/api/organizations/{TENANT}/people", headers={
+                    "Authorization": f"Bearer {create_token('demo-admin', TENANT)}"},
+                    json={"email": "x@example.test", "first_name": first, "last_name": last})
+                self.assertEqual(refused.status_code, 422, refused.text)
+
+    def test_teams_are_counted_and_named(self):
+        made = self.client.post(f"/api/organizations/{TENANT}/teams", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}"}, json={"name": "Mobile"})
+        self.assertEqual(made.status_code, 201, made.text)
+        self.add_person("mo@example.test", "Mo", "Idris", team_id=made.json()["team_id"])
+        answered = self.ask("how many teams do I have", session="teams")["speech"]
+        self.assertIn("Mobile", answered)
+
+    def test_a_product_says_what_it_is_for_in_the_words_somebody_wrote(self):
+        import yaml
+        from library_fixtures import library_definition
+
+        definition = library_definition()
+        definition["definition"].update(ownership="organization_private", owner_organization=TENANT)
+        added = self.client.post(f"/api/organizations/{TENANT}/products", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}"}, json={
+            "product_id": "northwind-billing", "team_id": "planning-team",
+            "definition_id": "sample_library",
+            "definition": yaml.safe_dump(definition, sort_keys=False),
+            "purpose": "Northwind Billing keeps our invoices and who owes what.",
+        })
+        self.assertEqual(added.status_code, 201, added.text)
+        self.assertIn("invoices", added.json()["purpose"])
+        # In Pixel itself, naming one of your products takes you to it - which is the platform's
+        # own rule and a reasonable answer to "what is it for", since the product's own screen
+        # says so. The sentence itself is approved text on that product, so the assistant inside
+        # it answers from what was written rather than from a guess.
+        self.assertEqual(self.action(self.ask("what is Sample Library for", session="purpose")),
+                         "OPEN_PRODUCT")
+        asked = self.client.post("/api/turn", headers={
+            "Authorization": f"Bearer {create_token('demo-admin', TENANT)}"}, json={
+            "session_id": "inside", "turn_id": 1, "product_id": "northwind-billing",
+            "message": "what is this product for", "workspace_scope_id": "primary"})
+        self.assertEqual(asked.status_code, 200, asked.text)
+        self.assertIn("invoices", asked.json()["speech"])
+
+    def test_a_purpose_is_never_read_out_of_another_organizations_product(self):
+        """The whole point of answering from live tables is that they are one organization's."""
+        from app.services.console_records import ConsoleKnowledge
+        from app.engine.knowledge import KnowledgeContext
+
+        binding = self.directory.product(TENANT, self.console.product_id)
+        context = KnowledgeContext(
+            tenant_id="somebody-else", product_id=self.console.product_id,
+            definition_id=CONSOLE_DEFINITION, definition_version=binding.definition_version,
+            definition_checksum=binding.definition_checksum,
+            knowledge_version=binding.knowledge_version, scope_label="all")
+        elsewhere = ConsoleKnowledge(context, "somebody-else", self.console.product_id)
+        for document in elsewhere.documents():
+            self.assertFalse(document["document_id"].startswith("product:"), document)
+
+
+class PointingAtControlsTest(ConsoleAssistantFixture):
+    """Asking where something is done takes you to it, rather than describing the button."""
+
+    def test_where_do_i_add_a_person(self):
+        body = self.ask("where do I add a person", session="add-person")
+        self.assertEqual(self.action(body), "HIGHLIGHT_ADD_PERSON")
+
+    def test_where_do_i_add_a_product(self):
+        body = self.ask("where do I add a product", session="add-product")
+        self.assertEqual(self.action(body), "HIGHLIGHT_ADD_PRODUCT")
+
+    def test_asking_to_add_a_product_still_opens_the_screen_that_does_it(self):
+        """Pointing must not swallow the request that was not asking where anything is."""
+        self.assertEqual(self.action(self.ask("add a product", session="do-add")), "OPEN_BUILD")
+
+
 if __name__ == "__main__":
     unittest.main()

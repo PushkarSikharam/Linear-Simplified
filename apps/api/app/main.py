@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.account_api import router as account_router
 from app.organization_api import grant_product_to_everyone, router as organization_router
-from app.product_knowledge import router as knowledge_router
+from app.product_knowledge import KnowledgeFull, router as knowledge_router, store_document
 from app.definitions.loader import parse_definition
 
 from contextlib import asynccontextmanager
@@ -467,6 +467,7 @@ class ProductSummary(BaseModel):
     visitor_access: bool
     entities: list[str]
     views: list[str]
+    purpose: str | None = None
 
 
 class ProductsResponse(BaseModel):
@@ -484,6 +485,10 @@ class AddProductRequest(BaseModel):
     # is stored: a product nobody can describe is not a product Pixel will run.
     definition: str = Field(min_length=1, max_length=MAX_DEFINITION_BYTES)
     definition_version: int = Field(default=1, ge=1)
+    # Why this organization added it, in their own sentence. Asked for because nothing else can
+    # supply it: a definition says what a product holds and what may be done in it, and never
+    # why anybody wanted it. It is what the assistant answers "what is this product for" from.
+    purpose: str = Field(min_length=3, max_length=280)
 
 
 class MemberSummary(BaseModel):
@@ -491,6 +496,12 @@ class MemberSummary(BaseModel):
 
     user_id: str
     email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    # What to call them on a screen or in a sentence: their name when Pixel was told one, and
+    # their address when it was not. Answered here so that every screen and the assistant agree
+    # on it rather than each inventing its own fallback.
+    name: str | None = None
     role: str
     team_id: str | None = None
     team_name: str | None = None
@@ -513,15 +524,25 @@ def list_members(tenant_id: str, user: AuthUser = Depends(require_member)) -> Me
     directory = agent.directory
     teams = {team.team_id: team.name for team in directory.teams(tenant_id)}
     with get_connection() as connection:
-        emails = {row["user_id"]: row["email"] for row in connection.execute(
-            "select user_id, email from email_accounts where tenant_id = ?", (tenant_id,)
-        ).fetchall()}
-    return MembersResponse(tenant_id=tenant_id, members=[
-        MemberSummary(user_id=member.user_id, email=emails.get(member.user_id),
-                      role=member.role, team_id=member.team_id,
-                      team_name=teams.get(member.team_id) if member.team_id else None)
-        for member in directory.members(tenant_id)
-    ])
+        accounts = {row["user_id"]: row for row in connection.execute(
+            "select user_id, email, first_name, last_name from email_accounts where tenant_id = ?",
+            (tenant_id,)).fetchall()}
+
+    def summary(member) -> MemberSummary:
+        account = accounts.get(member.user_id)
+        first = account["first_name"] if account else None
+        last = account["last_name"] if account else None
+        email = account["email"] if account else None
+        return MemberSummary(
+            user_id=member.user_id, email=email, first_name=first, last_name=last,
+            # Their name, then their address, then the identifier they were made with. A row
+            # with no name at all is still a person somebody has to be able to point at.
+            name=" ".join(part for part in (first, last) if part) or email or member.user_id,
+            role=member.role, team_id=member.team_id,
+            team_name=teams.get(member.team_id) if member.team_id else None)
+
+    return MembersResponse(tenant_id=tenant_id,
+                           members=[summary(member) for member in directory.members(tenant_id)])
 
 
 @app.get("/api/organizations/{tenant_id}/products", response_model=ProductsResponse)
@@ -565,6 +586,7 @@ def list_products(tenant_id: str, user: AuthUser = Depends(require_member)) -> P
             visitor_access=binding.visitor_access,
             entities=sorted(definition.entities),
             views=sorted(definition.views),
+            purpose=binding.purpose,
         ))
     return ProductsResponse(tenant_id=tenant_id, products=summaries)
 
@@ -651,7 +673,8 @@ def add_product(tenant_id: str, body: AddProductRequest, http: Request,
                          version=body.definition_version)
         directory.definitions.ensure_published(body.definition_id, body.definition_version)
         binding = directory.bind_product(tenant_id, body.product_id, body.team_id,
-                                         body.definition_id, body.definition_version)
+                                         body.definition_id, body.definition_version,
+                                         purpose=body.purpose.strip())
     except (DefinitionError, RegistryError) as refused:
         raise HTTPException(status_code=400, detail=str(refused)) from refused
     # Whoever added the product can work in it straight away; a product nobody may open is not
@@ -660,13 +683,44 @@ def add_product(tenant_id: str, body: AddProductRequest, http: Request,
     # And so can everyone else already in the organization, each on their own terms.
     grant_product_to_everyone(tenant_id, body.product_id, directory)
     definition = directory.definitions.load(body.definition_id, body.definition_version).definition
+    _approve_purpose(tenant_id, binding, definition.identity.product_name, body.purpose.strip())
     return ProductSummary(
         team_id=binding.team_id,
         product_id=binding.product_id, name=definition.identity.product_name,
         definition_id=binding.definition_id, definition_version=binding.definition_version,
         state=binding.state, visitor_access=binding.visitor_access,
         entities=sorted(definition.entities), views=sorted(definition.views),
+        purpose=binding.purpose,
     )
+
+
+def _approve_purpose(tenant_id: str, binding, product_name: str, purpose: str) -> None:
+    """The sentence somebody wrote about their product, as text the assistant may answer from.
+
+    Stored exactly like any other approved text, because that is what it is: an administrator
+    wrote it and approved it in the same breath. Without this the sentence would sit in the
+    binding where only a screen could read it, and asking the assistant what the product is for
+    would be answered with "I only know about what has been approved" - about text they had just
+    written themselves.
+
+    It is never worth failing the product over: the product exists, and a missing sentence can be
+    added on the knowledge screen.
+    """
+    if not purpose:
+        return
+    try:
+        with get_connection() as connection:
+            connection.execute("begin immediate")
+            # Titled with the word somebody uses when they ask. Ranking counts a word in a
+            # title for more than one in a body, and "what is this product for" carries the
+            # product's own name nowhere - so a title that only named the product was never
+            # what the question was about.
+            store_document(connection, tenant_id, binding.product_id,
+                           binding.definition_checksum, binding.knowledge_version,
+                           f"What the {product_name} product is for",
+                           f"{product_name} is a product in Pixel. It is for: {purpose}")
+    except Exception:  # noqa: BLE001 - the product is added either way
+        logger.warning("product_purpose_not_approved", extra={"product_id": binding.product_id})
 
 
 class RecordCreate(BaseModel):

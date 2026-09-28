@@ -26,11 +26,31 @@ from app.services.record_store import PRIMARY
 router = APIRouter(prefix="/api/organizations", tags=["organization"])
 
 _EMAIL = re.compile(r"[^\s@<>\r\n]+@[^\s@<>\r\n]+\.[^\s@<>\r\n]+")
+# What a person's name may not contain. Deliberately a list of what is refused rather than a
+# list of what is allowed: names carry accents, apostrophes, hyphens, spaces and scripts this
+# file has never heard of, and a tidy-looking allow-list of Latin letters is how software tells
+# people their own name is invalid. Only the characters that would forge a line of markup, an
+# address or a log entry are turned away.
+_NOT_IN_A_NAME = re.compile(r"[<>@\r\n\t]")
+
+
+def person_name(value: str, which: str) -> str:
+    """One part of somebody's name, as it will be stored and shown."""
+    name = " ".join(value.split())
+    if not name:
+        raise HTTPException(status_code=422, detail=f"Enter their {which}.")
+    if _NOT_IN_A_NAME.search(name):
+        raise HTTPException(status_code=422, detail=f"A {which} cannot contain < > or @.")
+    return name
 
 
 class NewPerson(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str = Field(min_length=3, max_length=254)
+    # Asked for, rather than derived from the address. "s.k.patel@" is not a name, and a screen
+    # that lists colleagues by address reads like a mailing list rather than an organization.
+    first_name: str = Field(min_length=1, max_length=60)
+    last_name: str = Field(min_length=1, max_length=60)
     role: Literal["team_member", "team_admin", "org_admin"] = "team_member"
     team_id: str | None = Field(default=None, max_length=64)
 
@@ -108,6 +128,8 @@ def add_person(tenant_id: str, body: NewPerson, user: AuthUser = Depends(require
     email = body.email.strip().lower()
     if not _EMAIL.fullmatch(email):
         raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    first_name = person_name(body.first_name, "first name")
+    last_name = person_name(body.last_name, "last name")
     directory = OrganizationDirectory()
     team = _active_team(tenant_id, body.team_id, directory) if body.team_id else _home_team(tenant_id, directory)
     if body.role != "org_admin" and team is None:
@@ -119,10 +141,14 @@ def add_person(tenant_id: str, body: NewPerson, user: AuthUser = Depends(require
     user_id = f"user-{uuid4().hex}"
     directory.add_member(tenant_id, user_id, body.role, None if body.role == "org_admin" else team)
     with get_connection() as connection:
-        connection.execute("insert into email_accounts values (?, ?, ?, ?)",
-                           (email, user_id, tenant_id, datetime.now(timezone.utc).isoformat()))
+        connection.execute(
+            "insert into email_accounts(email, user_id, tenant_id, created_at, first_name, last_name) "
+            "values (?, ?, ?, ?, ?, ?)",
+            (email, user_id, tenant_id, datetime.now(timezone.utc).isoformat(), first_name, last_name))
     grant_products_to(tenant_id, user_id, body.role, directory)
-    return {"user_id": user_id, "email": email, "role": body.role}
+    return {"user_id": user_id, "email": email, "role": body.role,
+            "first_name": first_name, "last_name": last_name,
+            "name": f"{first_name} {last_name}"}
 
 
 def _active_team(tenant_id: str, team_id: str, directory: OrganizationDirectory) -> str:

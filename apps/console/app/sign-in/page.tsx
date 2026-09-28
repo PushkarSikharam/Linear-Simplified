@@ -16,7 +16,7 @@ import { requestEmailCode, signInMode, signInWithEmail, type SignInMode } from "
  */
 const DESCRIPTION: Record<SignInMode, string> = {
   code: "We'll email you a one-time code. There is no password, and if you have not been here before this makes you a workspace of your own.",
-  open: "Type the address you want your workspace under. There is no code and no password, and if you have not been here before this makes you a workspace of your own - come back to the same address and your products and people are where you left them.",
+  open: "Tell us who you are. There is no code and no password, and if you have not been here before this makes you a workspace of your own - come back to the same address and your products and people are where you left them.",
   disabled: "Sign-in is not switched on for this Pixel yet.",
 };
 
@@ -24,6 +24,8 @@ export default function SignIn() {
   const router = useRouter();
   const [mode, setMode] = useState<SignInMode | null>(null);
   const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
@@ -44,7 +46,13 @@ export default function SignIn() {
     setSending(true);
     try {
       if (mode === "open") {
-        await signInWithEmail(address);
+        // Their name is asked for here because an open deployment sends nothing and has no other
+        // moment to ask. Without it a workspace knows an address and nobody's name, and the
+        // assistant answers "who is in my organization" by reading an address aloud.
+        const first = firstName.trim();
+        const last = lastName.trim();
+        if (!first || !last) { setError("Enter your first and last name."); setSending(false); return; }
+        await signInWithEmail(address, first, last);
         router.replace("/console");
         return;
       }
@@ -59,13 +67,29 @@ export default function SignIn() {
   return (
     <AuthCard title="Sign in to Pixel"
       description={mode === null ? DESCRIPTION.code : DESCRIPTION[mode]}
-      footer={<Link href="/demo">Explore the demo</Link>}>
+      footer={<Link href="/demo">Visit demo</Link>}>
       {mode === "disabled"
         ? <Alert tone="warn">Nobody can sign in here until whoever runs this Pixel turns sign-in on.</Alert>
         : <form className="px-stack" onSubmit={submit} noValidate>
+            {mode === "open" ? (
+              <div className="px-row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 140px" }}>
+                  <Field label="First name">{(f) => (
+                    <Input id={f.id} describedBy={f.describedBy} autoComplete="given-name" maxLength={60}
+                      autoFocus value={firstName} onChange={(e) => { setFirstName(e.target.value); setError(null); }} />
+                  )}</Field>
+                </div>
+                <div style={{ flex: "1 1 140px" }}>
+                  <Field label="Last name">{(f) => (
+                    <Input id={f.id} describedBy={f.describedBy} autoComplete="family-name" maxLength={60}
+                      value={lastName} onChange={(e) => { setLastName(e.target.value); setError(null); }} />
+                  )}</Field>
+                </div>
+              </div>
+            ) : null}
             <Field label="Your email" error={error}>{(f) => (
               <Input id={f.id} describedBy={f.describedBy} invalid={f.invalid} type="email" autoComplete="email" inputMode="email"
-                autoFocus value={email} onChange={(e) => { setEmail(e.target.value); setError(null); }} />
+                autoFocus={mode !== "open"} value={email} onChange={(e) => { setEmail(e.target.value); setError(null); }} />
             )}</Field>
             <Button type="submit" variant="primary" loading={sending} disabled={mode === null}>
               {mode === "open" ? "Continue" : "Email me a code"}

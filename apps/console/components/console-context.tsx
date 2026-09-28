@@ -34,6 +34,7 @@ export interface ConsoleProduct {
   teamId: string;
   name: string;
   slug: string;
+  /** What it is for, in one line: the sentence somebody wrote, or its shape when nobody did. */
   description: string;
   state: "active" | "archived";
   revision: number;
@@ -44,6 +45,15 @@ interface ConsoleApi extends ConsoleState {
   liveError: string | null;
   /** Set when the last attempt failed because Pixel's server did not answer, not because of who asked. */
   liveUnavailable: boolean;
+  /**
+   * Set only when the server said it does not know this caller.
+   *
+   * Everything else - a proxy hiccup, a cold container, a refused request on the way back from
+   * another page - is a failure to ask, not an answer about who is asking. Those used to land in
+   * the same branch, so one bad response while returning from the demo put a Sign in button in
+   * front of somebody whose session was alive the whole time.
+   */
+  signedOut: boolean;
   account: ApiAccount | null;
   loading: boolean;
   reloadProducts: () => void;
@@ -59,6 +69,14 @@ interface ConsoleApi extends ConsoleState {
   setTheme: (theme: ConsoleState["theme"]) => void;
 }
 
+/**
+ * How long to wait before asking the server a second time.
+ *
+ * Long enough that a container which was asleep has started answering, short enough that
+ * nobody reads it as the page being stuck.
+ */
+const RETRY_PAUSE_MS = 600;
+
 const Context = createContext<ConsoleApi | null>(null);
 
 export function ConsoleProvider({ children }: { children: ReactNode }) {
@@ -72,6 +90,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [live, setLive] = useState<ApiProduct[] | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
   const [liveUnavailable, setLiveUnavailable] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [loading, setLoading] = useState(true);
   const [reloads, setReloads] = useState(0);
   useEffect(() => {
@@ -79,31 +98,49 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     // A retry after an outage shows that it is trying again rather than the old failure.
     if (reloads > 0) setLoading(true);
     (async () => {
-      try {
-        // Ask the server, rather than looking for something this tab happens to remember. A new
-        // tab, a refresh and a reopened browser all still carry the session cookie, and each of
-        // them used to look signed out because this tab's own memory was empty.
-        const identity = await currentAccount();
-        const products = await listProducts({ csrfToken: "", userId: identity.user_id, tenantId: identity.tenant_id });
-        if (!cancelled) {
+      // Two attempts, because one failed request is not an answer about who is asking. Coming
+      // back from the demo can land on a cold container or a proxy that is still warming up, and
+      // a single unlucky response used to end with a Sign in button in front of somebody whose
+      // session had not gone anywhere. Only the server saying it does not know this caller ends
+      // the question, and it ends it on the first attempt without waiting for the second.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          // Ask the server, rather than looking for something this tab happens to remember. A new
+          // tab, a refresh and a reopened browser all still carry the session cookie, and each of
+          // them used to look signed out because this tab's own memory was empty.
+          const identity = await currentAccount();
+          const products = await listProducts({ csrfToken: "", userId: identity.user_id, tenantId: identity.tenant_id });
+          if (cancelled) return;
           setAccount(identity);
           setState((current) => ({ ...current, organizationId: identity.tenant_id,
             productId: products.some((p) => p.product_id === current.productId) ? current.productId : null }));
           setLive(products);
           setLiveError(null);
           setLiveUnavailable(false);
-        }
-      } catch (error) {
-        if (!cancelled) {
+          setSignedOut(false);
+          break;
+        } catch (error) {
+          if (cancelled) return;
           // Being signed out is not an error, and the server's words for it ("Authorization header
           // is required") are not for the person reading the page.
-          const signedOut = error instanceof ApiError && (error.status === 401 || error.status === 403);
-          setLiveError(signedOut ? null : error instanceof Error ? error.message : "Products could not be loaded.");
+          const refused = error instanceof ApiError && (error.status === 401 || error.status === 403);
+          if (refused) {
+            setSignedOut(true);
+            setLiveError(null);
+            setLiveUnavailable(false);
+            break;
+          }
+          if (attempt === 0) {
+            await new Promise((settle) => setTimeout(settle, RETRY_PAUSE_MS));
+            if (cancelled) return;
+            continue;
+          }
+          setSignedOut(false);
+          setLiveError(error instanceof Error ? error.message : "Products could not be loaded.");
           setLiveUnavailable(serverUnavailable(error));
         }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
+      if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [reloads]);
@@ -114,7 +151,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     teamId: product.team_id ?? "",
     name: product.name,
     slug: product.product_id,
-    description: `${product.entities.length} kinds of record, ${product.views.length} screens.`,
+    // What somebody wrote about it beats what Pixel can count about it. A product added
+        // before anybody was asked still says something true rather than nothing.
+        description: product.purpose?.trim()
+          || `${product.entities.length} kinds of record, ${product.views.length} screens.`,
     state: product.state === "active" ? "active" : "archived",
     revision: product.definition_version,
   })), [live, state.organizationId]);
@@ -138,9 +178,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const api = useMemo<ConsoleApi>(() => ({
-    ...state, visibleProducts, liveError, liveUnavailable, account, loading, reloadProducts,
+    ...state, visibleProducts, liveError, liveUnavailable, signedOut, account, loading, reloadProducts,
     productSurface, setProductSurface, selectProduct, setActiveWork, setTheme,
-  }), [state, visibleProducts, liveError, liveUnavailable, account, loading, reloadProducts,
+  }), [state, visibleProducts, liveError, liveUnavailable, signedOut, account, loading, reloadProducts,
        productSurface, selectProduct, setActiveWork, setTheme]);
   return <Context.Provider value={api}>{children}</Context.Provider>;
 }

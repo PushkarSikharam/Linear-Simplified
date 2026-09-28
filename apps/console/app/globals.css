@@ -282,6 +282,45 @@ code, .px-mono { font-family: var(--px-mono); font-size: var(--px-text-sm); }
 .px-nav a:hover { background: var(--px-surface-2); color: var(--px-text); text-decoration: none; }
 .px-nav a[aria-current="page"] { background: var(--px-surface-2); border-color: var(--px-border); color: var(--px-text); box-shadow: inset 3px 0 0 var(--px-accent); }
 .px-nav a[aria-current="page"] svg { color: var(--px-accent); }
+/* The one way into the guided demo. It is the thing a first-time visitor is most likely
+   to want and the hardest thing to find by guessing, so it is the only accented item in
+   the navigation rather than one more row of the same grey. */
+.px-nav a.px-nav-cta { background: var(--px-accent); border-color: var(--px-accent); color: var(--px-on-accent); font-weight: 600; }
+.px-nav a.px-nav-cta:hover { background: var(--px-accent-hover); border-color: var(--px-accent-hover); color: var(--px-on-accent); }
+.px-nav a.px-nav-cta svg { color: currentColor; }
+
+/* A control the assistant was asked to point at. Outlined rather than recoloured, so it
+   is visible on a button that already carries a colour, and it never depends on colour
+   alone: it also takes focus, which moves the screen reader to it. */
+.px-highlight { outline: 3px solid var(--px-accent); outline-offset: 3px; border-radius: 9px; }
+
+/* How much there is of everything, at the top of the overview. Three tiles rather than a
+   sentence, because a number is what the eye goes to, and each one opens the screen it
+   counts. */
+.px-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--px-space-3); list-style: none; margin: 0 0 var(--px-space-4); padding: 0; }
+.px-counts a { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; gap: 0 var(--px-space-3); align-items: center; padding: var(--px-space-3) var(--px-space-4); border: 1px solid var(--px-border); border-radius: 10px; background: var(--px-surface); color: var(--px-text); text-decoration: none; }
+.px-counts a:hover { background: var(--px-surface-2); border-color: var(--px-accent); }
+.px-counts svg { grid-row: span 2; width: 22px; height: 22px; color: var(--px-accent); }
+.px-counts strong { font-size: var(--px-text-xl); line-height: 1.1; }
+.px-counts span { color: var(--px-text-2); font-size: var(--px-text-sm); }
+
+/* Edith is working. Three dots in the shape of the reply that is coming, so the panel
+   never sits blank while somebody wonders whether their question went anywhere. */
+.px-edith-thinking { display: inline-flex; gap: 5px; align-items: center; min-height: 1.2em; }
+.px-edith-thinking i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.35; }
+@media (prefers-reduced-motion: no-preference) {
+  .px-edith-thinking i { animation: px-think 1.1s ease-in-out infinite; }
+  .px-edith-thinking i:nth-child(2) { animation-delay: 0.15s; }
+  .px-edith-thinking i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes px-think { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 0.9; } }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .px-highlight { animation: px-found 1.1s ease-in-out 2; }
+  @keyframes px-found {
+    0%, 100% { outline-color: var(--px-accent); }
+    50% { outline-color: transparent; }
+  }
+}
 .px-nav svg { width: 16px; height: 16px; }
 .px-nav-section { font-size: 11px; color: var(--px-text-3); padding: var(--px-space-3) 10px var(--px-space-1); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .px-topbar { display: flex; align-items: center; justify-content: space-between; gap: var(--px-space-3); height: 52px; padding: 0 var(--px-space-6); border-bottom: 1px solid var(--px-border); position: sticky; top: 0; background: color-mix(in srgb, var(--px-bg) 88%, transparent); backdrop-filter: blur(8px); z-index: 20; }

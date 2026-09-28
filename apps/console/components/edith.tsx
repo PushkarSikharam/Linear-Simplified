@@ -12,7 +12,7 @@
  * and carries out only a change the backend already authorised and handed it a one-time key for.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   SERVER_UNAVAILABLE, serverUnavailable,
@@ -21,6 +21,7 @@ import {
 } from "@pixel-console/lib/pixel-api";
 import { speechInputConstructor, type SpeechInput } from "@pixel-console/lib/speech-input";
 import { CONSOLE_ROUTES, consoleRecordRoute } from "@pixel-console/lib/console-routes";
+import { highlightControl } from "@pixel-console/lib/highlight";
 
 /**
  * A short route through whichever product is answering, drawn from what that product declares.
@@ -30,6 +31,12 @@ import { CONSOLE_ROUTES, consoleRecordRoute } from "@pixel-console/lib/console-r
  * this morning: the steps are its own navigable actions, in the order its definition declares
  * them, which is the order its author meant somebody to meet them in.
  */
+// A reply arrives over about a second however long it is: enough to read as speech, never
+// enough to make somebody wait for words that are already here.
+const REVEAL_TICKS = 40;
+const REVEAL_TICK_MS = 25;
+
+
 function starterSteps(shape: ApiProductShape): string[] {
   const places = shape.actions
     .filter((action) => action.capability === "NAVIGATE_VIEW")
@@ -85,6 +92,11 @@ export function EdithPanel({
   onUiAction?: (action: ApiActionShape, payload: Record<string, unknown>) => void;
 }) {
   const router = useRouter();
+  // How much of the newest reply has arrived on screen. A reply is composed in one piece on
+  // the server, and it used to land in one piece too, which reads as a wall of text appearing
+  // rather than as somebody answering. Revealing it takes about a second however long it is, so
+  // a short answer is not slowed down and a long one does not crawl.
+  const [revealed, setRevealed] = useState<{ index: number; shown: number } | null>(null);
   const [messages, setMessages] = useState<Array<{ role: "visitor" | "agent"; text: string }>>([
     { role: "agent", text: openingMessage(shape, scope) },
   ]);
@@ -131,7 +143,31 @@ export function EdithPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { log.current?.scrollTo({ top: log.current.scrollHeight }); }, [messages, busy]);
+  useEffect(() => { log.current?.scrollTo({ top: log.current.scrollHeight }); }, [messages, busy, revealed]);
+
+  // Somebody who has asked for less motion gets the whole reply at once, which is also what a
+  // browser with no timers does. Nothing waits on this: the text is already here either way.
+  useEffect(() => {
+    if (revealed === null) return;
+    const full = messages[revealed.index]?.text ?? "";
+    if (revealed.shown >= full.length) { setRevealed(null); return; }
+    const calm = typeof window !== "undefined" && window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (calm) { setRevealed({ index: revealed.index, shown: full.length }); return; }
+    const step = Math.max(1, Math.ceil(full.length / REVEAL_TICKS));
+    const timer = window.setTimeout(
+      () => setRevealed({ index: revealed.index, shown: Math.min(full.length, revealed.shown + step) }),
+      REVEAL_TICK_MS);
+    return () => window.clearTimeout(timer);
+  }, [revealed, messages]);
+
+  /** Add something Edith said, and let it arrive rather than appear. */
+  const say = useCallback((text: string) => {
+    setMessages((all) => {
+      setRevealed({ index: all.length, shown: 0 });
+      return [...all, { role: "agent" as const, text }];
+    });
+  }, []);
   // On a phone the assistant is a full screen of its own, so opening a page would mean scrolling
   // past all of it to reach the page. It starts folded there and opens when somebody asks for it.
   // Set after mount, so the server and the browser render the same thing first.
@@ -168,14 +204,18 @@ export function EdithPanel({
         throw new Error("The reply did not match this conversation. Please retry.");
       }
       if (response.status === "stale" || response.status === "cancelled") return;
-      setMessages((all) => [...all, { role: "agent", text: response.speech }]);
+      say(response.speech);
       const action = response.status === "completed" && response.validated_action ? actions[response.validated_action.type] : null;
       if (response.validated_action && !response.execution) {
         // A place in the application is somewhere to go; anything else is for the screen showing
         // this product. An action this product does not declare came from Pixel itself, which
         // happens when somebody asks to leave the product they are in.
         const payload = response.validated_action.payload as { view?: string; record_id?: string };
-        const view = action?.capability === "NAVIGATE_VIEW" ? action.view : payload.view;
+        // Both kinds of action name the screen they mean: one goes there, the other goes there
+        // and marks a control on it. Reading the screen only from a navigation left pointing
+        // with nowhere to go, so it marked a control on whatever page happened to be open.
+        const view = action && (action.capability === "NAVIGATE_VIEW" || action.capability === "HIGHLIGHT_CONTROL")
+          ? action.view : payload.view;
         const route = typeof view === "string" ? CONSOLE_ROUTES[view] : undefined;
         // One of Pixel's own records is a place too: asked for a product by name, Pixel opens
         // that product rather than the list it appears in. Inside a product the same reply is
@@ -183,14 +223,21 @@ export function EdithPanel({
         const record = scope === "platform" && action?.capability === "OPEN_RECORD" && action.entity
           ? consoleRecordRoute(action.entity, String(payload.record_id ?? ""))
           : null;
-        if (record) router.push(record);
+        // Being shown where something is done is a shorter route to doing it than being told.
+        // The screen it lives on is opened first; the control is marked once it has arrived.
+        const control = action?.capability === "HIGHLIGHT_CONTROL" ? action.control : null;
+        if (control) {
+          if (route) router.push(route);
+          highlightControl(control);
+        }
+        else if (record) router.push(record);
         else if (route && (!action || action.capability === "NAVIGATE_VIEW")) router.push(route);
         else if (action) onUiAction?.(action, response.validated_action.payload);
       }
       const receipt = await maybeExecute(session, productId, response, actions);
       if (!alive.current) return;
       if (receipt) {
-        setMessages((all) => [...all, { role: "agent", text: receipt.speech }]);
+        say(receipt.speech);
         await onRecordsChanged?.();
         if (action && receipt.outcome === "executed" && typeof receipt.record?.id === "string") {
           onUiAction?.(action, { record_id: receipt.record.id });
@@ -263,6 +310,7 @@ export function EdithPanel({
     if (turn.current > 0) void closeConversation(session, sessionId.current);
     sessionId.current = crypto.randomUUID();
     turn.current = 0;
+    setRevealed(null);
     setMessages([{ role: "agent", text: openingMessage(shape, scope) }]);
   }
 
@@ -304,12 +352,25 @@ export function EdithPanel({
 
         <div ref={log} className="px-edith-transcript" role="log" aria-live="polite"
           aria-label="Conversation">
-          {messages.map((message, index) => (
-            <article key={index} className="px-edith-message" data-role={message.role}>
-              <span>{message.role === "visitor" ? "You" : "Agent"}</span>
-              <p>{message.text}</p>
+          {messages.map((message, index) => {
+            // While a reply is still arriving it is hidden from assistive technology, so this
+            // live region announces the finished sentence once instead of announcing it again
+            // at every keystroke's worth of text.
+            const arriving = revealed !== null && revealed.index === index;
+            const shown = arriving ? message.text.slice(0, revealed.shown) : message.text;
+            return (
+              <article key={index} className="px-edith-message" data-role={message.role}>
+                <span>{message.role === "visitor" ? "You" : "Agent"}</span>
+                <p aria-hidden={arriving || undefined}>{shown}</p>
+              </article>
+            );
+          })}
+          {busy ? (
+            <article className="px-edith-message" data-role="agent" aria-hidden>
+              <span>Agent</span>
+              <p className="px-edith-thinking"><i /><i /><i /></p>
             </article>
-          ))}
+          ) : null}
         </div>
 
         {steps.length ? (

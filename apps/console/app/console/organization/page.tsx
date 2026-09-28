@@ -31,6 +31,8 @@ function LivePeople() {
   const [problem, setProblem] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
   const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [role, setRole] = useState<PersonRole>("team_member");
   const [teamId, setTeamId] = useState("");
   const [adding, setAdding] = useState(false);
@@ -66,14 +68,17 @@ function LivePeople() {
     event.preventDefault();
     const address = normalizeEmail(email);
     if (!address) { setAddError("Enter a valid email address."); return; }
+    const first = firstName.trim();
+    const last = lastName.trim();
+    if (!first || !last) { setAddError("Enter their first and last name."); return; }
     const session = storedSession();
     if (!session) return;
     setAdding(true); setAddError(null);
     try {
-      await addPerson(session, address, role, chosenTeam || null);
+      await addPerson(session, address, first, last, role, chosenTeam || null);
       const where = role === "org_admin" ? "" : ` to ${teams.find((team) => team.team_id === chosenTeam)?.name ?? "their team"}`;
-      toast("ok", `${address} was added${where}. They can sign in with that email now.`);
-      setEmail(""); setRole("team_member"); setReloads((n) => n + 1);
+      toast("ok", `${first} ${last} was added${where}. They can sign in with that email now.`);
+      setEmail(""); setFirstName(""); setLastName(""); setRole("team_member"); setReloads((n) => n + 1);
     } catch (error) {
       setAddError(error instanceof Error ? error.message : "That person could not be added.");
     } finally {
@@ -117,7 +122,7 @@ function LivePeople() {
     if (!person || !session) return;
     try {
       await removePerson(session, person.user_id);
-      toast("ok", `${person.email ?? "That person"} was removed and signed out.`);
+      toast("ok", `${person.name ?? person.email ?? "That person"} was removed and signed out.`);
       setReloads((n) => n + 1);
     } catch (error) {
       toast("danger", error instanceof Error ? error.message : "That person could not be removed.");
@@ -139,10 +144,24 @@ function LivePeople() {
         <Panel title="Add a person">
           <form className="px-stack" onSubmit={add} noValidate>
             <p className="px-muted" style={{ margin: 0 }}>
-              Enter their work email. They sign in with it and a code we email them, and they
-              arrive in their team with its products.
+              Their name is how everyone here will see them, and how Edith answers when somebody
+              asks who is in the organization. They sign in with the email address.
             </p>
             <div className="px-row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div style={{ flex: "0 1 150px" }}>
+                <Field label="First name">{(f) => (
+                  <Input id={f.id} describedBy={f.describedBy} value={firstName} maxLength={60}
+                    autoComplete="off" placeholder="Maya"
+                    onChange={(e) => { setFirstName(e.target.value); setAddError(null); }} />
+                )}</Field>
+              </div>
+              <div style={{ flex: "0 1 150px" }}>
+                <Field label="Last name">{(f) => (
+                  <Input id={f.id} describedBy={f.describedBy} value={lastName} maxLength={60}
+                    autoComplete="off" placeholder="Chen"
+                    onChange={(e) => { setLastName(e.target.value); setAddError(null); }} />
+                )}</Field>
+              </div>
               <div style={{ flex: "1 1 240px" }}>
                 <Field label="Email" error={addError}>{(f) => (
                   <Input id={f.id} describedBy={f.describedBy} invalid={f.invalid} type="email" value={email}
@@ -168,7 +187,8 @@ function LivePeople() {
                   )}</Field>
                 </div>
               ) : null}
-              <Button type="submit" variant="primary" loading={adding}><UserPlus aria-hidden />Add person</Button>
+              <Button type="submit" variant="primary" loading={adding} data-px-control="add_person_button">
+                <UserPlus aria-hidden />Add person</Button>
             </div>
             <p className="px-small px-muted" style={{ margin: 0 }}>{ROLE_HINT}</p>
           </form>
@@ -196,7 +216,8 @@ function LivePeople() {
                     placeholder="Team name" onChange={(e) => { setNewTeam(e.target.value); setTeamError(null); }} />
                 )}</Field>
               </div>
-              <Button type="submit" loading={makingTeam}><Plus aria-hidden />Create team</Button>
+              <Button type="submit" loading={makingTeam} data-px-control="create_team_button">
+                <Plus aria-hidden />Create team</Button>
             </form>
           ) : null}
           {isAdmin && teams.length > 1 && products.length ? (
@@ -222,13 +243,16 @@ function LivePeople() {
         <ul className="px-people-cards" aria-label="People">
           {people.map((person) => {
             const you = person.user_id === c.account?.user_id;
-            const who = person.email ?? "Invited person";
+            // Their name if Pixel was told one, their address if not. Never a blank card.
+            const who = person.name ?? person.email ?? "Invited person";
+            const named = Boolean(person.first_name || person.last_name);
             return (
               <li key={person.user_id} className="px-person-card">
-                <span className="px-avatar" aria-hidden>{initials(who.split("@")[0].replace(/[._-]+/g, " "))}</span>
+                <span className="px-avatar" aria-hidden>{initials(named ? who : who.split("@")[0].replace(/[._-]+/g, " "))}</span>
                 <span className="px-person-text">
                   <strong>{who}{you ? <span className="px-small px-muted"> (you)</span> : null}</strong>
-                  <span>{ROLE_WORDS[person.role] ?? person.role} · {person.team_name ?? "All teams"}</span>
+                  <span>{ROLE_WORDS[person.role] ?? person.role} · {person.team_name ?? "All teams"}
+                    {named && person.email ? ` · ${person.email}` : ""}</span>
                 </span>
                 {isAdmin && !you ? (
                   <span className="px-row" style={{ gap: 4 }}>
@@ -247,7 +271,7 @@ function LivePeople() {
         onSaved={(message) => { toast("ok", message); setChanging(null); setReloads((n) => n + 1); }} />
       <Dialog open={removing !== null} onOpenChange={(open) => { if (!open) setRemoving(null); }}
         title="Remove this person?"
-        description={`${removing?.email ?? "They"} will be signed out straight away and lose access to every product here.`}
+        description={`${removing?.name ?? removing?.email ?? "They"} will be signed out straight away and lose access to every product here.`}
         actions={<>
           <Button onClick={() => setRemoving(null)}>Keep</Button>
           <Button variant="danger" onClick={() => void remove()}>Remove</Button>
@@ -287,8 +311,8 @@ function ChangePersonDialog({ person, teams, onClose, onSaved }: {
       await changePerson(session, person.user_id, role, role === "org_admin" ? null : team);
       const teamName = teams.find((option) => option.team_id === team)?.name;
       onSaved(role === "org_admin"
-        ? `${person.email ?? "They"} can now manage everything.`
-        : `${person.email ?? "They"} is now ${ROLE_WORDS[role].toLowerCase()} in ${teamName ?? "their team"}.`);
+        ? `${person.name ?? person.email ?? "They"} can now manage everything.`
+        : `${person.name ?? person.email ?? "They"} is now ${ROLE_WORDS[role].toLowerCase()} in ${teamName ?? "their team"}.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "This could not be changed.");
     } finally {
@@ -298,7 +322,7 @@ function ChangePersonDialog({ person, teams, onClose, onSaved }: {
 
   return (
     <Dialog open={person !== null} onOpenChange={(open) => { if (!open) onClose(); }}
-      title={`Change ${person?.email ?? "this person"}`}
+      title={`Change ${person?.name ?? person?.email ?? "this person"}`}
       description="It applies the next time they do anything; they don't need to sign in again."
       actions={<>
         <Button onClick={onClose} disabled={saving}>Cancel</Button>

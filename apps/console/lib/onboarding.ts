@@ -58,6 +58,14 @@ export interface OnboardingState {
   slugChosen?: boolean;
   step: Step;
   name: string;
+  /**
+   * One sentence saying what this product is for, in the words of whoever added it.
+   *
+   * Asked for rather than derived: a definition says what a product holds and what may be done
+   * in it, and never why anybody wanted it. It becomes approved text on the product, so the
+   * assistant answers "what is this product for" from something a person wrote.
+   */
+  purpose: string;
   slug: string;
   teamId: string;
   sources: Source[];
@@ -73,7 +81,7 @@ export interface OnboardingState {
 }
 
 export const initialOnboarding = (teamId: string): OnboardingState => ({
-  step: "details", name: "", slug: "", teamId, sources: [], things: [], understanding: null,
+  step: "details", name: "", purpose: "", slug: "", teamId, sources: [], things: [], understanding: null,
   analysisRevision: null, sourceRevision: 0,
   understandingAccepted: false, actions: [], findings: [], validatedRevision: null, configRevision: 0,
 });
@@ -90,7 +98,8 @@ export function canEnter(state: OnboardingState, step: Step): boolean {
   const accepted = state.sources.filter((s) => s.status === "accepted");
   switch (step) {
     case "details": return true;
-    case "sources": return state.name.trim().length > 0 && SLUG.test(state.slug);
+    case "sources": return state.name.trim().length > 0 && SLUG.test(state.slug)
+      && state.purpose.trim().length >= 3;
     // Something to keep, and something to call each one: a product nobody can describe is not a
     // product Pixel can write.
     case "analyzing": return canEnter(state, "sources") && state.things.some((thing) => !thing.people)
@@ -450,7 +459,10 @@ export function applyTemplate(state: OnboardingState, templateId: string): Onboa
   const things = template.things.map((described) => ({
     ...described, fields: described.fields.map((field) => ({ ...field })),
   }));
-  return invalidateAnalysis({ ...state, things });
+  // A template already says what it is for, so it fills that in rather than asking somebody to
+  // write out again what they just chose. Anything they typed themselves is left alone.
+  const purpose = state.purpose.trim() || template.summary;
+  return invalidateAnalysis({ ...state, things, purpose });
 }
 
 /**

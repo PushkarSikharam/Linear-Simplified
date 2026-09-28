@@ -390,6 +390,7 @@ class ProductEndpointsTest(AddedProductFixture):
             "product_id": "added-through-the-api", "team_id": "planning-team",
             "definition_id": DEFINITION,
             "definition": yaml.safe_dump(definition, sort_keys=False),
+            "purpose": "Keeps the work this team does.",
         })
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(response.json()["name"], "Sample Library")
@@ -405,6 +406,7 @@ class ProductEndpointsTest(AddedProductFixture):
             "product_id": "added-by-team-owner", "team_id": "planning-team",
             "definition_id": DEFINITION,
             "definition": yaml.safe_dump(definition, sort_keys=False),
+            "purpose": "Keeps the work this team does.",
         })
         self.assertEqual(response.status_code, 201, response.text)
 
@@ -416,6 +418,7 @@ class ProductEndpointsTest(AddedProductFixture):
             "product_id": "wrong-team-product", "team_id": "platform-team",
             "definition_id": DEFINITION,
             "definition": yaml.safe_dump(library_definition(), sort_keys=False),
+            "purpose": "Keeps the work this team does.",
         })
         self.assertEqual(response.status_code, 403, response.text)
 
@@ -423,6 +426,7 @@ class ProductEndpointsTest(AddedProductFixture):
         response = self.client.post(f"/api/organizations/{TENANT}/products", headers=self.as_user(), json={
             "product_id": "never-added", "team_id": "planning-team",
             "definition_id": "not_a_definition", "definition": "this: is not a product",
+            "purpose": "Keeps the work this team does.",
         })
         self.assertEqual(response.status_code, 400, response.text)
         listed = self.client.get(f"/api/organizations/{TENANT}/products", headers=self.as_user())
@@ -435,6 +439,7 @@ class ProductEndpointsTest(AddedProductFixture):
             "product_id": "should-not-exist", "team_id": "planning-team",
             "definition_id": DEFINITION,
             "definition": yaml.safe_dump(library_definition(), sort_keys=False),
+            "purpose": "Keeps the work this team does.",
         })
         self.assertEqual(response.status_code, 403, response.text)
 

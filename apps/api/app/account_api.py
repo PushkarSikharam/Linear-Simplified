@@ -23,6 +23,7 @@ import logging
 from app.auth import CSRF_COOKIE, SESSION_COOKIE, AuthUser, create_token, require_auth, require_member
 from app.definitions.console import configured_console, ensure_console_product
 from app.definitions.organizations import OrganizationDirectory
+from app.organization_api import person_name
 from app.db import get_connection
 from app.services.env import env_bool, env_value
 
@@ -57,6 +58,27 @@ SMTP_TIMEOUT_SECONDS = 20
 class EmailRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str = Field(min_length=3, max_length=254)
+
+
+class OpenSignInRequest(BaseModel):
+    """An address and the name to put to it.
+
+    The name is asked for here because an open deployment sends nothing and has no other moment
+    to ask. It is used when the workspace is opened, and filled in later if it was missing; it
+    never silently renames somebody who already has a name, so a typo on one sign-in cannot
+    change what colleagues have been calling them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+    first_name: str = Field(min_length=1, max_length=60)
+    last_name: str = Field(min_length=1, max_length=60)
+
+
+class NameChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    first_name: str = Field(min_length=1, max_length=60)
+    last_name: str = Field(min_length=1, max_length=60)
 
 
 class CodeRequest(BaseModel):
@@ -284,7 +306,7 @@ def _start_session(account, response: Response) -> dict:
     return {"csrf_token": csrf, "user_id": account["user_id"], "tenant_id": account["tenant_id"]}
 
 
-def _register(email: str) -> dict:
+def _register(email: str, first_name: str | None = None, last_name: str | None = None) -> dict:
     """A first sign-in becomes an organization of one, built the way every organization is.
 
     Made through the directory rather than by writing its rows, so a new organization is checked
@@ -299,8 +321,11 @@ def _register(email: str) -> dict:
         directory.create_team(tenant_id, DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME)
         directory.add_member(tenant_id, user_id, "org_admin")
         with get_connection() as connection:
-            connection.execute("insert into email_accounts values (?, ?, ?, ?)",
-                               (email, user_id, tenant_id, datetime.now(timezone.utc).isoformat()))
+            connection.execute(
+                "insert into email_accounts(email, user_id, tenant_id, created_at, first_name, last_name) "
+                "values (?, ?, ?, ?, ?, ?)",
+                (email, user_id, tenant_id, datetime.now(timezone.utc).isoformat(),
+                 first_name, last_name))
     except Exception:  # noqa: BLE001 - the caller is told plainly and can ask for another code
         logger.warning("organization_not_created")
         raise HTTPException(503, "Your workspace could not be created. Please try again.") from None
@@ -327,7 +352,7 @@ def sign_in_mode(response: Response) -> dict:
 
 
 @router.post("/sign-in")
-def open_sign_in(body: EmailRequest, response: Response) -> dict:
+def open_sign_in(body: OpenSignInRequest, response: Response) -> dict:
     """Sign in with an address alone, when this deployment is set up that way.
 
     A first address opens its own workspace; the same address later returns to the same one,
@@ -342,6 +367,8 @@ def open_sign_in(body: EmailRequest, response: Response) -> dict:
     email = body.email.strip().lower()
     if not re.fullmatch(EMAIL_PATTERN, email):
         raise HTTPException(422, "Enter a valid email address.")
+    first_name = person_name(body.first_name, "first name")
+    last_name = person_name(body.last_name, "last name")
     now, limited = time.time(), False
     with get_connection() as connection:
         connection.execute("begin immediate")
@@ -360,15 +387,28 @@ def open_sign_in(body: EmailRequest, response: Response) -> dict:
         raise HTTPException(429, "Too many new workspaces have been opened here in the last hour. "
                                  "Please try again later.", headers={"Retry-After": "3600"})
     if opening_a_workspace:
-        account = _register(email)
+        account = _register(email, first_name, last_name)
+    else:
+        _name_if_missing(email, first_name, last_name)
     return _start_session(account, response)
+
+
+def _name_if_missing(email: str, first_name: str, last_name: str) -> None:
+    """Fill in a name for an account that has none, and leave one that has alone."""
+    with get_connection() as connection:
+        connection.execute(
+            "update email_accounts set first_name = ?, last_name = ? "
+            "where email = ? and (first_name is null or first_name = '')",
+            (first_name, last_name, email))
 
 
 @router.get("/session")
 def account_session(response: Response, user: AuthUser = Depends(require_auth)) -> dict:
     require_member(user)
     with get_connection() as connection:
-        account = connection.execute("select email from email_accounts where user_id=?", (user.user_id,)).fetchone()
+        account = connection.execute(
+            "select email, first_name, last_name from email_accounts where user_id=?",
+            (user.user_id,)).fetchone()
         organization = connection.execute("select name from organizations where tenant_id=?", (user.tenant_id,)).fetchone()
         teams = connection.execute("select team_id, name from teams where tenant_id=? and state='active' "
                                    "and (?='org_admin' or team_id=?)", (user.tenant_id, user.role, user.team_id)).fetchall()
@@ -381,11 +421,33 @@ def account_session(response: Response, user: AuthUser = Depends(require_auth)) 
     console = configured_console()
     if console is not None and OrganizationDirectory().product(user.tenant_id, console.product_id) is None:
         console = None
-    return {"user_id": user.user_id, "email": account[0] if account else None,
+    first_name = account["first_name"] if account else None
+    last_name = account["last_name"] if account else None
+    return {"user_id": user.user_id, "email": account["email"] if account else None,
+            "first_name": first_name, "last_name": last_name,
+            # What to call this person, with their address as the fallback so a screen always
+            # has something true to show.
+            "name": " ".join(part for part in (first_name, last_name) if part)
+                    or (account["email"] if account else None),
             "tenant_id": user.tenant_id, "organization_name": organization[0],
             "role": user.role, "team_id": user.team_id,
             "console_product_id": console.product_id if console else None,
             "teams": [dict(team) for team in teams]}
+
+
+@router.patch("/name")
+def change_own_name(body: NameChange, user: AuthUser = Depends(require_auth)) -> dict:
+    """Your own name, corrected by you. Never anybody else's."""
+    require_member(user)
+    first_name = person_name(body.first_name, "first name")
+    last_name = person_name(body.last_name, "last name")
+    with get_connection() as connection:
+        changed = connection.execute(
+            "update email_accounts set first_name = ?, last_name = ? where user_id = ?",
+            (first_name, last_name, user.user_id)).rowcount
+    if not changed:
+        raise HTTPException(404, "This account has no address to put a name to.")
+    return {"first_name": first_name, "last_name": last_name, "name": f"{first_name} {last_name}"}
 
 
 @router.post("/logout", status_code=204)

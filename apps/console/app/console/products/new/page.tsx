@@ -155,6 +155,11 @@ function GuidedProductOnboarding({ onAdvanced }: { onAdvanced?: () => void }) {
                         s.slugChosen ? s.slug : addressFor(e.target.value), { derived: !s.slugChosen }));
                     }} />
                 )}</Field>
+                <Field label="What is it for?" hint="One sentence. Edith answers from this when somebody asks what the product is for.">{(f) => (
+                  <Input id={f.id} describedBy={f.describedBy} value={state.purpose} maxLength={280}
+                    required placeholder="Keeps our invoices and who owes what."
+                    onChange={(e) => setState((s) => ({ ...s, purpose: e.target.value }))} />
+                )}</Field>
                 {chooseLiveTeam ? (
                   <Field label="Which team runs it" hint="People in that team can use it. Admins can use every product.">{(f) => (
                     <select id={f.id} aria-describedby={f.describedBy} className="px-select" value={liveTeam ?? ""}
@@ -344,6 +349,7 @@ function GuidedProductOnboarding({ onAdvanced }: { onAdvanced?: () => void }) {
                         definitionId,
                         definition: state.understanding?.definition ?? starterDefinitionText(state),
                         version: 1,
+                        purpose: state.purpose.trim(),
                       });
                       c.reloadProducts();
                       setState((s) => publish(s));

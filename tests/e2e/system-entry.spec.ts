@@ -10,7 +10,10 @@ test("system entry starts with sign-in and keeps private navigation hidden", asy
   await expect(page.getByRole("navigation", { name: "Primary" })).toHaveCount(0);
   await expect(page.getByText("LIVE DEMO GUIDE", { exact: false })).toHaveCount(0);
   await page.screenshot({ path: "test-results/system-desktop.png", fullPage: true });
-  await page.getByRole("link", { name: "Explore the demo", exact: true }).click();
+  // One way in, called one thing. It used to be offered as "Explore the demo" here and "Visit
+  // demo" a click away, which reads as two different places.
+  await expect(page.getByRole("link", { name: "Explore the demo", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "Visit demo", exact: true }).click();
   await expect(page).toHaveURL(/\/demo$/);
   await expect(page.getByText("LIVE DEMO GUIDE", { exact: false })).toBeVisible();
 });

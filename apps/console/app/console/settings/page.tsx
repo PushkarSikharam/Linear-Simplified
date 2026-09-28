@@ -73,6 +73,7 @@ function LiveSettings() {
           <Field label="Organization name" error={error}
             hint={isAdmin ? "Shown to everyone in your organization and at the top of every page." : "Only an organization admin can change this."}>{(f) => (
             <Input id={f.id} describedBy={f.describedBy} invalid={f.invalid} value={name} maxLength={80}
+              data-px-control="organization_name_field"
               disabled={!isAdmin} onChange={(e) => { setName(e.target.value); setError(null); }} />
           )}</Field>
           {isAdmin ? (

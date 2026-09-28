@@ -55,7 +55,8 @@ test("where this Pixel is open, an address alone is the whole sign-in", async ({
     requests.push(path);
     if (path.endsWith("/account/sign-in-mode")) return route.fulfill({ json: { mode: "open" } });
     if (path.endsWith("/account/sign-in")) {
-      expect(route.request().postDataJSON()).toEqual({ email: "manager@example.test" });
+      expect(route.request().postDataJSON()).toEqual({
+        email: "manager@example.test", first_name: "Priya", last_name: "Raman" });
       return route.fulfill({ json: { csrf_token: "test-csrf", user_id: "manager", tenant_id: "private" } });
     }
     if (path.endsWith("/account/session")) return route.fulfill({ json: {
@@ -67,6 +68,9 @@ test("where this Pixel is open, an address alone is the whole sign-in", async ({
     return route.fulfill({ status: 404, json: { detail: "Unexpected test request" } });
   });
   await page.goto("/sign-in");
+  // An open deployment sends nothing, so this is the only moment it can ask who somebody is.
+  await page.getByLabel("First name").fill("Priya");
+  await page.getByLabel("Last name").fill("Raman");
   await page.getByLabel("Your email").fill("manager@example.test");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Welcome to Pixel", exact: true })).toBeVisible();

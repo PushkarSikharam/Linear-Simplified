@@ -13,6 +13,8 @@ export interface ApiProduct {
   team_id?: string;
   product_id: string;
   name: string;
+  /** One sentence from whoever added it, saying what it is for. Absent for older products. */
+  purpose?: string | null;
   definition_id: string;
   definition_version: number;
   state: string;
@@ -156,6 +158,9 @@ export class RecordConflictError extends ApiError {
 
 export interface ApiAccount {
   user_id: string; email: string | null; tenant_id: string; organization_name: string;
+  first_name?: string | null; last_name?: string | null;
+  /** What to call this person: their name, or their address when Pixel was never told one. */
+  name?: string | null;
   role: "org_admin" | "team_admin" | "team_member"; team_id: string | null;
   /** The product that answers requests about Pixel itself; null when none is configured. */
   console_product_id: string | null;
@@ -177,9 +182,10 @@ export async function signInMode(): Promise<SignInMode> {
 }
 
 /** Sign in with an address alone, where this deployment is set up that way. */
-export async function signInWithEmail(email: string): Promise<ApiSession> {
+export async function signInWithEmail(email: string, firstName: string, lastName: string): Promise<ApiSession> {
   const answer = await call<{ csrf_token: string; user_id: string; tenant_id: string }>(
-    "/account/sign-in", { method: "POST", body: JSON.stringify({ email }) },
+    "/account/sign-in",
+    { method: "POST", body: JSON.stringify({ email, first_name: firstName, last_name: lastName }) },
   );
   const session = { csrfToken: answer.csrf_token, userId: answer.user_id, tenantId: answer.tenant_id };
   remember(session);
@@ -370,6 +376,14 @@ export function signOut(): void {
 export interface ApiMember {
   user_id: string;
   email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  /**
+   * What to call them on a screen: their name, their address, or failing both the identifier
+   * they were made with. The server decides it so that every screen and the assistant agree,
+   * rather than each page inventing its own fallback.
+   */
+  name: string | null;
   role: string;
   team_id: string | null;
   team_name: string | null;
@@ -385,12 +399,28 @@ export async function listMembers(session: ApiSession): Promise<ApiMember[]> {
 
 export type PersonRole = "team_member" | "team_admin" | "org_admin";
 
-/** Give an email address a place in this organization. They sign in with it to arrive here. */
-export async function addPerson(session: ApiSession, email: string, role: PersonRole,
+/**
+ * Give a person a place in this organization. They sign in with that address to arrive here.
+ *
+ * Their name is asked for rather than guessed from the address: colleagues are listed by name,
+ * and the assistant answers "who is in my organization" with names, which it cannot do from
+ * `s.k.patel@` without making something up.
+ */
+export async function addPerson(session: ApiSession, email: string, firstName: string,
+                                lastName: string, role: PersonRole,
                                 teamId?: string | null): Promise<ApiMember> {
   return call<ApiMember>(`/organizations/${encodeURIComponent(session.tenantId)}/people`, {
-    method: "POST", body: JSON.stringify({ email, role, ...(teamId && role !== "org_admin" ? { team_id: teamId } : {}) }),
+    method: "POST",
+    body: JSON.stringify({ email, first_name: firstName, last_name: lastName, role,
+                           ...(teamId && role !== "org_admin" ? { team_id: teamId } : {}) }),
   }, session);
+}
+
+/** Correct your own name. Never anybody else's. */
+export async function changeOwnName(firstName: string, lastName: string): Promise<{ name: string }> {
+  return call<{ name: string }>("/account/name", {
+    method: "PATCH", body: JSON.stringify({ first_name: firstName, last_name: lastName }),
+  });
 }
 
 /** Change what somebody can do and which team they work in. */
@@ -442,6 +472,7 @@ export async function listProducts(session: ApiSession): Promise<ApiProduct[]> {
 
 export async function addProduct(session: ApiSession, product: {
   productId: string; teamId: string; definitionId: string; definition: string; version?: number;
+  purpose: string;
 }): Promise<ApiProduct> {
   return call<ApiProduct>(
     `/organizations/${encodeURIComponent(session.tenantId)}/products`,
@@ -453,6 +484,7 @@ export async function addProduct(session: ApiSession, product: {
         definition_id: product.definitionId,
         definition: product.definition,
         definition_version: product.version ?? 1,
+        purpose: product.purpose,
       }),
     },
     session,

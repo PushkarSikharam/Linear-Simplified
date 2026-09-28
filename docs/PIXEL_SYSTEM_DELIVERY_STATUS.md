@@ -25,6 +25,29 @@ This is an implementation inventory, not a claim that the SaaS product is finish
   product. They are not confidential record-scoped documents. The upload control says this.
 - Knowledge capacity is bounded: sixteen documents, 128,000 characters and twenty publication
   increments per product. There is no pruning of historical sources while sessions may use them.
+- People have names. Adding somebody asks for their first and last name, and open sign-in asks
+  the person signing in for their own, because a deployment that sends nothing has no other
+  moment to ask. Screens list colleagues by name, and the assistant answers "who is in my
+  organization" with names rather than reading addresses aloud. An account with no name on
+  record still shows its address, never a blank.
+- Products say what they are for. Adding one asks for a sentence; it is stored on the binding
+  and published as approved text on that product, so the assistant answers "what is this
+  product for" from what a person wrote. Pixel's own assistant reads the same sentences live
+  from the bindings rather than keeping a copy of them.
+- Pixel's own records include the organization's teams, each with the number of people in it,
+  and every person's team. All of it is read from the platform's tables at the moment of the
+  question, so a count cannot drift from what the organization actually has.
+- The assistant can point: asking where a person is added opens People and teams with the Add
+  person control outlined and focused. The definition names the control; a screen claims that
+  name, and a control nobody claims is simply not pointed at.
+- One way into the guided demo, called "Visit demo" everywhere and accented in the navigation.
+  It used to be offered twice under two names in the same sidebar.
+- The overview carries counts of products, people and teams, read from the same endpoints the
+  assistant answers from.
+- Being signed out and failing to reach the server are answered differently. Only the server
+  saying it does not know the caller offers a sign-in; anything else keeps the person where
+  they are, says their session is intact, and offers to try again - and the session check is
+  attempted twice before either conclusion.
 - The separate guided demo remains at `/demo`.
 
 ## Required Configuration
