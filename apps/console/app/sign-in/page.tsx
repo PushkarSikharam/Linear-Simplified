@@ -78,12 +78,14 @@ export default function SignIn() {
         ? <Alert tone="warn">Nobody can sign in here until whoever runs this Pixel turns sign-in on.</Alert>
         : <form className="px-stack" onSubmit={submit} noValidate>
             {mode === "open" ? (
-              <div className="px-row" aria-label="Sign-in choice">
-                <Button type="button" variant={openFlow === "sign-in" ? "primary" : "ghost"}
+              <div className="px-row" role="group" aria-label="Sign in or create an account">
+                <Button type="button" aria-pressed={openFlow === "sign-in"}
+                  variant={openFlow === "sign-in" ? "primary" : "ghost"}
                   onClick={() => { setOpenFlow("sign-in"); setError(null); }}>
                   Sign in
                 </Button>
-                <Button type="button" variant={openFlow === "sign-up" ? "primary" : "ghost"}
+                <Button type="button" aria-pressed={openFlow === "sign-up"}
+                  variant={openFlow === "sign-up" ? "primary" : "ghost"}
                   onClick={() => { setOpenFlow("sign-up"); setError(null); }}>
                   Create account
                 </Button>
@@ -110,7 +112,7 @@ export default function SignIn() {
                 autoFocus={mode !== "open"} value={email} onChange={(e) => { setEmail(e.target.value); setError(null); }} />
             )}</Field>
             <Button type="submit" variant="primary" loading={sending} disabled={mode === null}>
-              {mode === "open" ? (openFlow === "sign-up" ? "Create workspace" : "Sign in") : "Email me a code"}
+              {mode === "open" ? (openFlow === "sign-up" ? "Create workspace" : "Continue") : "Email me a code"}
             </Button>
           </form>}
     </AuthCard>
