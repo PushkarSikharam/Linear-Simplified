@@ -101,6 +101,10 @@ const journeys = [
   {
     title: "Running several products",
     steps: ["Each has its own definition", "Each has its own records and words", "Adding one changes nothing about the others"]
+  },
+  {
+    title: "Being shown where, not told",
+    steps: ["Ask where something is done", "Pixel opens that screen and marks the control", "Or says plainly that it is not yours to use"]
   }
 ];
 
@@ -183,7 +187,9 @@ export default function ArchitecturePage() {
             <p>
               A definition names what the product keeps, what its screens are called, what can be done in it,
               and the words people use for all of that. It is read as untrusted input, checked before anything
-              runs on it, and it never writes the words the assistant says.
+              runs on it, and it never writes the words the assistant says. Pixel holds itself to the same
+              terms: moving around Pixel is described by a definition too, and answered by the same engine as
+              any product inside it.
             </p>
           </article>
           <article>
@@ -192,7 +198,10 @@ export default function ArchitecturePage() {
             <p>
               Who somebody is, which organization they belong to, which records are within their reach and
               whether a change may be carried out are all settled by the platform, on the server, for every
-              product the same way. A product cannot widen any of it by describing itself differently.
+              product the same way. A product cannot widen any of it by describing itself differently. What
+              Pixel says about your own organization - how many products you run, who is in it, which team
+              each belongs to - is read from its own tables at the moment you ask, never from a copy that
+              could drift away from what you actually have.
             </p>
           </article>
         </div>
@@ -201,7 +210,7 @@ export default function ArchitecturePage() {
       <section className={styles.journeys} aria-labelledby="journey-title">
         <div className={styles.sectionIntro}>
           <p className={styles.kicker}>What it looks like</p>
-          <h2 id="journey-title">Five things you can do, in any product.</h2>
+          <h2 id="journey-title">Six things you can do, in any product.</h2>
         </div>
         <div className={styles.journeyGrid}>
           {journeys.map((journey) => (
@@ -223,8 +232,9 @@ export default function ArchitecturePage() {
           <h2 id="boundaries-title">What is real, and what is not yet.</h2>
         </div>
         <div className={styles.boundaryList}>
-          <p><strong>Working now:</strong> signing in by email, organizations with teams and roles, adding your own product from a description, immutable definition versions, records kept apart by organization and by product, scoped answers, confirmation before any change, a record of every change carried out, answers quoted from approved text, and voice.</p>
-          <p><strong>Not yet:</strong> billing and metering, encrypted backups with restores that are proven rather than assumed, retrieval that understands meaning rather than words, and hand-built screens for a product you describe yourself, which today gets its lists and its assistant rather than a bespoke interface.</p>
+          <p><strong>Working now:</strong> signing in with your own address, a workspace that is still there when you come back, people with names, teams and roles, adding your own product from a description and a sentence saying what it is for, immutable definition versions, records kept apart by organization and by product, scoped answers, confirmation before any change, a record of every change carried out, answers quoted from approved text, being shown where a control is rather than told, and voice.</p>
+          <p><strong>Not yet:</strong> billing and metering, restores that are proven rather than assumed, anything watching the service and saying when it stops, retrieval that understands meaning rather than words, and hand-built screens for a product you describe yourself, which today gets its lists and its assistant rather than a bespoke interface.</p>
+          <p><strong>How you get in:</strong> an address identifies a workspace, and the deployment decides what it takes to prove it is yours: a one-time code sent to that address, or - where it is set up for a demonstration - the address on its own. What happens after is the same either way. The first address to arrive opens an organization; the same address comes back to the same one, with its products, its people and its records where they were left.</p>
           <p><strong>Where the line is:</strong> what a product describes and what a product is allowed to do are separate on purpose. A definition can be wrong, or written by somebody untrusted, without being able to reach past what the platform permits.</p>
         </div>
       </section>
