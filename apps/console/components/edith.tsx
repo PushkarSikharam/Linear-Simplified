@@ -35,6 +35,9 @@ import { highlightControl } from "@pixel-console/lib/highlight";
 // enough to make somebody wait for words that are already here.
 const REVEAL_TICKS = 40;
 const REVEAL_TICK_MS = 25;
+const EDITH_KEY_PREFIX = "pixel.edith.";
+type EdithMessage = { role: "visitor" | "agent"; text: string };
+type StoredEdithConversation = { sessionId: string; turn: number; messages: EdithMessage[] };
 
 
 function starterSteps(shape: ApiProductShape): string[] {
@@ -77,6 +80,52 @@ function openingMessage(shape: ApiProductShape, scope: "platform" | "product"): 
   return `Welcome to ${shape.product_name}. I'm ${shape.assistant_name}. Ask me to open screens, count records, create records, or explain what this product knows.`;
 }
 
+function conversationKey(session: ApiSession, scope: "platform" | "product", productId: string): string {
+  const surface = scope === "platform" ? "pixel" : `product:${productId}`;
+  return `${EDITH_KEY_PREFIX}${session.tenantId}:${session.userId}:${surface}`;
+}
+
+function readConversation(key: string, fallback: EdithMessage): StoredEdithConversation {
+  const fresh = () => ({
+    sessionId: globalThis.crypto?.randomUUID?.() ?? `session-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    turn: 0,
+    messages: [fallback],
+  });
+  if (typeof window === "undefined") return fresh();
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return fresh();
+    const parsed = JSON.parse(raw) as Partial<StoredEdithConversation>;
+    const storedTurn = parsed.turn;
+    if (typeof parsed.sessionId !== "string" || !Array.isArray(parsed.messages)
+      || typeof storedTurn !== "number" || !Number.isInteger(storedTurn) || storedTurn < 0) return fresh();
+    const messages = parsed.messages.filter((message) =>
+      (message.role === "visitor" || message.role === "agent") && typeof message.text === "string");
+    if (!messages.length) return fresh();
+    return { sessionId: parsed.sessionId, turn: storedTurn, messages };
+  } catch {
+    return fresh();
+  }
+}
+
+function writeConversation(key: string, stored: StoredEdithConversation): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(stored));
+  } catch {
+    /* the conversation remains server-side for this page lifetime */
+  }
+}
+
+function clearConversation(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    /* storage is optional */
+  }
+}
+
 export function EdithPanel({
   session, shape, productId, currentPage = null, selectedRecordId = null,
   scope = "product", onRecordsChanged, onUiAction,
@@ -92,14 +141,19 @@ export function EdithPanel({
   onUiAction?: (action: ApiActionShape, payload: Record<string, unknown>) => void;
 }) {
   const router = useRouter();
+  const key = useMemo(() => conversationKey(session, scope, productId), [productId, scope, session.tenantId, session.userId]);
+  const initial = useMemo(
+    () => readConversation(key, { role: "agent", text: openingMessage(shape, scope) }),
+    // A keyed remount creates a new component when this should change; this memo only seeds refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
   // How much of the newest reply has arrived on screen. A reply is composed in one piece on
   // the server, and it used to land in one piece too, which reads as a wall of text appearing
   // rather than as somebody answering. Revealing it takes about a second however long it is, so
   // a short answer is not slowed down and a long one does not crawl.
   const [revealed, setRevealed] = useState<{ index: number; shown: number } | null>(null);
-  const [messages, setMessages] = useState<Array<{ role: "visitor" | "agent"; text: string }>>([
-    { role: "agent", text: openingMessage(shape, scope) },
-  ]);
+  const [messages, setMessages] = useState<EdithMessage[]>(initial.messages);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -119,8 +173,9 @@ export function EdithPanel({
   const playing = useRef<HTMLAudioElement | null>(null);
   const audioUrl = useRef<string | null>(null);
   const log = useRef<HTMLDivElement | null>(null);
-  const turn = useRef(0);
-  const sessionId = useRef("");
+  const turn = useRef(initial.turn);
+  const sessionId = useRef(initial.sessionId);
+  const unloading = useRef(false);
   function stopAudio() {
     speechRequest.current?.abort();
     playing.current?.pause();
@@ -130,19 +185,27 @@ export function EdithPanel({
   }
   useEffect(() => {
     alive.current = true;
-    sessionId.current = crypto.randomUUID();
     setMicAvailable(speechInputConstructor() !== null);
+    const leavingPage = () => { unloading.current = true; };
+    window.addEventListener("pagehide", leavingPage);
     return () => {
       alive.current = false;
+      window.removeEventListener("pagehide", leavingPage);
       request.current?.abort();
       recognition.current?.abort();
       stopAudio();
       // Leaving takes the conversation with it, including anything it proposed and nobody did.
       // A conversation nobody spoke in does not exist on the server, so there is nothing to close.
-      if (turn.current > 0) void closeConversation(session, sessionId.current);
+      if (!unloading.current && turn.current > 0) {
+        clearConversation(key);
+        void closeConversation(session, sessionId.current);
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    writeConversation(key, { sessionId: sessionId.current, turn: turn.current, messages });
+  }, [key, messages]);
   useEffect(() => { log.current?.scrollTo({ top: log.current.scrollHeight }); }, [messages, busy, revealed]);
 
   // Somebody who has asked for less motion gets the whole reply at once, which is also what a
@@ -317,6 +380,7 @@ export function EdithPanel({
     if (turn.current > 0) void closeConversation(session, sessionId.current);
     sessionId.current = crypto.randomUUID();
     turn.current = 0;
+    clearConversation(key);
     setRevealed(null);
     setMessages([{ role: "agent", text: openingMessage(shape, scope) }]);
   }

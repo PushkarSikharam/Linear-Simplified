@@ -60,15 +60,7 @@ class EmailRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
 
 
-class OpenSignInRequest(BaseModel):
-    """An address and the name to put to it.
-
-    The name is asked for here because an open deployment sends nothing and has no other moment
-    to ask. It is used when the workspace is opened, and filled in later if it was missing; it
-    never silently renames somebody who already has a name, so a typo on one sign-in cannot
-    change what colleagues have been calling them.
-    """
-
+class OpenSignUpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str = Field(min_length=3, max_length=254)
     first_name: str = Field(min_length=1, max_length=60)
@@ -352,14 +344,30 @@ def sign_in_mode(response: Response) -> dict:
 
 
 @router.post("/sign-in")
-def open_sign_in(body: OpenSignInRequest, response: Response) -> dict:
-    """Sign in with an address alone, when this deployment is set up that way.
+def open_sign_in(body: EmailRequest, response: Response) -> dict:
+    """Return an existing open-mode account to its workspace.
 
-    A first address opens its own workspace; the same address later returns to the same one,
-    with its products, its people and its records where they were left. That is the whole
-    difference from the code path: what is skipped is the proof that the person typing holds
-    the inbox, not any part of what an account is.
+    Open mode skips inbox proof, not account ownership inside Pixel. An address already known
+    here returns to its same tenant, products, people and records. A new address must use the
+    sign-up path so the account has a real name from the first screen.
     """
+    if not open_sign_in_enabled():
+        raise HTTPException(403, "This Pixel sends a one-time code. Ask for one on the sign-in page.")
+    if env_value("PIXEL_ENGINE_MODE") != "definition":
+        raise HTTPException(503, "Customer workspaces require the definition engine before sign-in can be enabled.")
+    email = body.email.strip().lower()
+    if not re.fullmatch(EMAIL_PATTERN, email):
+        raise HTTPException(422, "Enter a valid email address.")
+    with get_connection() as connection:
+        account = connection.execute("select * from email_accounts where email=?", (email,)).fetchone()
+    if account is None:
+        raise HTTPException(404, "No Pixel account uses that email yet. Create an account first.")
+    return _start_session(account, response)
+
+
+@router.post("/sign-up")
+def open_sign_up(body: OpenSignUpRequest, response: Response) -> dict:
+    """Open a new workspace in open mode."""
     if not open_sign_in_enabled():
         raise HTTPException(403, "This Pixel sends a one-time code. Ask for one on the sign-in page.")
     if env_value("PIXEL_ENGINE_MODE") != "definition":
@@ -373,33 +381,21 @@ def open_sign_in(body: OpenSignInRequest, response: Response) -> dict:
     with get_connection() as connection:
         connection.execute("begin immediate")
         account = connection.execute("select * from email_accounts where email=?", (email,)).fetchone()
-        opening_a_workspace = account is None
-        if opening_a_workspace:
-            connection.execute("delete from email_login_limits where starts_at < ?", (now - 3600,))
-            row = connection.execute("select attempts from email_login_limits where bucket=?",
-                                     (OPEN_SIGN_IN_BUCKET,)).fetchone()
-            limited = bool(row) and row[0] >= OPEN_SIGN_IN_WORKSPACES_PER_HOUR
-            if not limited:
-                connection.execute("insert into email_login_limits values (?, ?, 1) "
-                                   "on conflict(bucket) do update set attempts=attempts+1",
-                                   (OPEN_SIGN_IN_BUCKET, now))
+        if account is not None:
+            raise HTTPException(409, "That email already has a Pixel account. Sign in instead.")
+        connection.execute("delete from email_login_limits where starts_at < ?", (now - 3600,))
+        row = connection.execute("select attempts from email_login_limits where bucket=?",
+                                 (OPEN_SIGN_IN_BUCKET,)).fetchone()
+        limited = bool(row) and row[0] >= OPEN_SIGN_IN_WORKSPACES_PER_HOUR
+        if not limited:
+            connection.execute("insert into email_login_limits values (?, ?, 1) "
+                               "on conflict(bucket) do update set attempts=attempts+1",
+                               (OPEN_SIGN_IN_BUCKET, now))
     if limited:
         raise HTTPException(429, "Too many new workspaces have been opened here in the last hour. "
                                  "Please try again later.", headers={"Retry-After": "3600"})
-    if opening_a_workspace:
-        account = _register(email, first_name, last_name)
-    else:
-        _name_if_missing(email, first_name, last_name)
+    account = _register(email, first_name, last_name)
     return _start_session(account, response)
-
-
-def _name_if_missing(email: str, first_name: str, last_name: str) -> None:
-    """Fill in a name for an account that has none, and leave one that has alone."""
-    with get_connection() as connection:
-        connection.execute(
-            "update email_accounts set first_name = ?, last_name = ? "
-            "where email = ? and (first_name is null or first_name = '')",
-            (first_name, last_name, email))
 
 
 @router.get("/session")

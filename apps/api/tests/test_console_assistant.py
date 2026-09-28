@@ -195,11 +195,13 @@ class AskingAboutPixelItselfTest(ConsoleAssistantFixture):
     def test_it_explains_how_the_application_works(self):
         answer = self.ask("how does Pixel work")
         self.assertIn("definition", answer["speech"].lower())
-        self.assertIn("product documentation", answer["speech"])
+        self.assertIn("Here's what Pixel knows", answer["speech"])
+        self.assertNotIn("product documentation", answer["speech"])
 
     def test_what_is_pixel_is_not_answered_as_a_route_list(self):
         answer = self.ask("what is Pixel")
-        self.assertIn("product documentation", answer["speech"])
+        self.assertIn("Here's what Pixel knows", answer["speech"])
+        self.assertNotIn("product documentation", answer["speech"])
         self.assertIn("product", answer["speech"].lower())
         self.assertNotIn("Here's what I can do", answer["speech"])
         self.assertIsNone(self.action(answer))

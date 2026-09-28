@@ -46,18 +46,29 @@ test("email sign-in never uses a shared demo identity", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "No products yet", exact: true })).toBeVisible();
 });
 
-test("where this Pixel is open, an address alone is the whole sign-in", async ({ page }) => {
-  // A deployment that cannot deliver mail says so, and the page follows it: no code is asked
-  // for, nothing is emailed, and the address goes straight to the workspace it owns.
-  const requests: string[] = [];
-  await page.route("**/api/agent/**", async (route) => {
+/**
+ * An open deployment stands somebody in front of two doors, and they are not the same door.
+ *
+ * Returning is an address and nothing else: the name, the products and the records are already
+ * on the account, and asking for a name again would invite somebody to contradict what their
+ * colleagues call them. Arriving for the first time has no account to read a name from, and an
+ * open deployment sends nothing, so this is its only chance to ask.
+ */
+function openPixel(page: import("@playwright/test").Page, requests: string[], seen: {
+  signIn?: unknown; signUp?: unknown;
+}) {
+  return page.route("**/api/agent/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     requests.push(path);
+    const session = { csrf_token: "test-csrf", user_id: "manager", tenant_id: "private" };
     if (path.endsWith("/account/sign-in-mode")) return route.fulfill({ json: { mode: "open" } });
     if (path.endsWith("/account/sign-in")) {
-      expect(route.request().postDataJSON()).toEqual({
-        email: "manager@example.test", first_name: "Priya", last_name: "Raman" });
-      return route.fulfill({ json: { csrf_token: "test-csrf", user_id: "manager", tenant_id: "private" } });
+      seen.signIn = route.request().postDataJSON();
+      return route.fulfill({ json: session });
+    }
+    if (path.endsWith("/account/sign-up")) {
+      seen.signUp = route.request().postDataJSON();
+      return route.fulfill({ json: session });
     }
     if (path.endsWith("/account/session")) return route.fulfill({ json: {
       user_id: "manager", email: "manager@example.test", tenant_id: "private",
@@ -67,16 +78,55 @@ test("where this Pixel is open, an address alone is the whole sign-in", async ({
     if (path.endsWith("/products")) return route.fulfill({ json: { products: [] } });
     return route.fulfill({ status: 404, json: { detail: "Unexpected test request" } });
   });
+}
+
+test("where this Pixel is open, returning takes an address and nothing else", async ({ page }) => {
+  const requests: string[] = [];
+  const seen: { signIn?: unknown; signUp?: unknown } = {};
+  await openPixel(page, requests, seen);
   await page.goto("/sign-in");
-  // An open deployment sends nothing, so this is the only moment it can ask who somebody is.
-  await page.getByLabel("First name").fill("Priya");
-  await page.getByLabel("Last name").fill("Raman");
+  // Signing in is the side somebody lands on, so returning costs one field and one press.
+  await expect(page.getByLabel("First name")).toHaveCount(0);
   await page.getByLabel("Your email").fill("manager@example.test");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Welcome to Pixel", exact: true })).toBeVisible();
   await expect(page.locator(".px-topbar")).toContainText("Private workspace");
+  expect(seen.signIn).toEqual({ email: "manager@example.test" });
+  expect(seen.signUp).toBeUndefined();
   expect(requests.some((path) => path.endsWith("/account/email-code"))).toBe(false);
   expect(requests.some((path) => path.endsWith("/account/verify-code"))).toBe(false);
+});
+
+test("where this Pixel is open, arriving for the first time is asked for a name", async ({ page }) => {
+  const requests: string[] = [];
+  const seen: { signIn?: unknown; signUp?: unknown } = {};
+  await openPixel(page, requests, seen);
+  await page.goto("/sign-in");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByLabel("First name").fill("Priya");
+  await page.getByLabel("Last name").fill("Raman");
+  await page.getByLabel("Your email").fill("manager@example.test");
+  await page.getByRole("button", { name: "Create workspace", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Welcome to Pixel", exact: true })).toBeVisible();
+  expect(seen.signUp).toEqual({
+    email: "manager@example.test", first_name: "Priya", last_name: "Raman" });
+  expect(seen.signIn).toBeUndefined();
+  expect(requests.some((path) => path.endsWith("/account/email-code"))).toBe(false);
+});
+
+test("the two ways in are told apart by name and by state", async ({ page }) => {
+  // Two controls in one form that read out identically leave somebody who cannot see which is
+  // filled in with no way to say which one they meant.
+  await openPixel(page, [], {});
+  await page.goto("/sign-in");
+  const signIn = page.getByRole("button", { name: "Sign in", exact: true });
+  await expect(signIn).toHaveCount(1);
+  await expect(signIn).toHaveAttribute("aria-pressed", "true");
+  const create = page.getByRole("button", { name: "Create account", exact: true });
+  await expect(create).toHaveAttribute("aria-pressed", "false");
+  await create.click();
+  await expect(create).toHaveAttribute("aria-pressed", "true");
+  await expect(signIn).toHaveAttribute("aria-pressed", "false");
 });
 
 for (const mobile of [false, true]) {
