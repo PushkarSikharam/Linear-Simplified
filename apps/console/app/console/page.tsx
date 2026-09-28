@@ -1,9 +1,58 @@
 "use client";
 
 import Link from "next/link";
-import { Network, PlayCircle, Plus, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Boxes, Network, PlayCircle, Plus, UserCircle, Users } from "lucide-react";
 import { useConsole } from "@pixel-console/components/console-context";
 import { Alert, EmptyState, PageHead, Panel, StatusBadge } from "@pixel-console/components/ui";
+import { listMembers, listTeams, storedSession } from "@pixel-console/lib/pixel-api";
+
+/**
+ * How much there is of everything, at a glance.
+ *
+ * A workspace with things in it should look like one. The numbers are the same ones the
+ * assistant answers with, read from the same endpoints, so the screen and Edith cannot disagree
+ * about how many people are here.
+ */
+function Counts({ products }: { products: number }) {
+  const [people, setPeople] = useState<number | null>(null);
+  const [teams, setTeams] = useState<number | null>(null);
+  useEffect(() => {
+    let current = true;
+    (async () => {
+      const session = storedSession();
+      if (!session) return;
+      try {
+        const [found, foundTeams] = await Promise.all([listMembers(session), listTeams(session)]);
+        if (current) { setPeople(found.length); setTeams(foundTeams.length); }
+      } catch {
+        // A count that cannot be fetched is left out rather than shown as zero, which would be
+        // a number somebody could act on and a lie.
+      }
+    })();
+    return () => { current = false; };
+  }, []);
+  // One of something is not "1 Teams". A count beside the wrong word is the kind of small
+  // wrongness that makes everything around it look unfinished.
+  const tiles: Array<[typeof Boxes, string, string, number | null, string]> = [
+    [Boxes, "Product", "Products", products, "/console/products"],
+    [UserCircle, "Person", "People", people, "/console/organization"],
+    [Users, "Team", "Teams", teams, "/console/organization"],
+  ];
+  return (
+    <ul className="px-counts" aria-label="What is in this workspace">
+      {tiles.map(([Icon, one, many, value, href]) => (
+        <li key={many}>
+          <Link href={href}>
+            <Icon aria-hidden />
+            <strong>{value === null ? "-" : value}</strong>
+            <span>{value === 1 ? one : many}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /**
  * What somebody sees when they arrive.
@@ -48,7 +97,7 @@ function LiveOverview() {
             <strong>See one that already works.</strong> The guided demo is a finished product
             running on the same Pixel you are using.
             <div className="px-row" style={{ marginTop: 6 }}>
-              <Link className="px-button" href="/demo"><PlayCircle aria-hidden />Explore the demo</Link>
+              <Link className="px-button" data-variant="primary" href="/demo"><PlayCircle aria-hidden />Visit demo</Link>
               <Link className="px-button" href="/architecture"><Network aria-hidden />How Pixel works</Link>
             </div>
           </li>
@@ -60,6 +109,8 @@ function LiveOverview() {
       </Panel>
     ) : null}
 
+    {first ? null : <Counts products={products.length} />}
+
     <Panel title="Your products" actions={products.length
       ? <Link href="/console/products">All products</Link> : undefined}>
       {first ? (
@@ -69,7 +120,7 @@ function LiveOverview() {
           Once you add one, it appears here and Edith can answer about it.
         </EmptyState>
       ) : <div className="px-table-wrap"><table className="px-table">
-        <thead><tr><th>Product</th><th>What it keeps</th><th>Version</th><th>Status</th></tr></thead>
+        <thead><tr><th>Product</th><th>What it is for</th><th>Version</th><th>Status</th></tr></thead>
         <tbody>{products.map((product) => (
           <tr key={product.id}>
             <td><Link href={`/console/products/${encodeURIComponent(product.id)}`}>{product.name}</Link></td>
@@ -84,9 +135,9 @@ function LiveOverview() {
     {first ? null : (
       <Panel title="Elsewhere in Pixel">
         <div className="px-row" style={{ flexWrap: "wrap" }}>
-          <Link className="px-button" href="/console/products/new"><Plus aria-hidden />Add a product</Link>
+          <Link className="px-button" data-px-control="add_product_button" href="/console/products/new"><Plus aria-hidden />Add a product</Link>
           <Link className="px-button" href="/console/organization"><Users aria-hidden />People and teams</Link>
-          <Link className="px-button" href="/demo"><PlayCircle aria-hidden />Explore the demo</Link>
+          <Link className="px-button" data-variant="primary" href="/demo"><PlayCircle aria-hidden />Visit demo</Link>
           <Link className="px-button" href="/architecture"><Network aria-hidden />How Pixel works</Link>
         </div>
       </Panel>

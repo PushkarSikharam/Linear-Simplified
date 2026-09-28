@@ -1,0 +1,303 @@
+# Product Definition: Pixel's own console.
+#
+# Pixel is a place a person moves around in, so the ways of moving around it are described here
+# rather than decided in the browser. One engine then answers both "open my products" and
+# whatever the product they are inside is asked, and the assistant is the same assistant in both.
+#
+# v9 makes Pixel able to answer about the organization it is running, and to point at the control
+# that does a thing rather than only describing where it lives. v1 to v8 are published and
+# unchanged.
+#
+# Three things change.
+#
+# People are people. Pixel now knows somebody's name, so the assistant names them instead of
+# reading their email address aloud, and the teams they work in are records of their own with
+# the number of people in each. Asking who is in the organization gets names back.
+#
+# Products say what they are for. Whoever adds a product writes one sentence about it, and that
+# sentence is approved text like any other, so "what is Northwind Billing for" is answered from
+# something a person wrote rather than from a guess.
+#
+# And the assistant can point. Somebody who asks where they add a person is taken to the screen
+# with that control highlighted, which is a shorter route to doing the thing than a description
+# of where the button is.
+#
+# Nothing here creates, changes or removes anything: adding a product, adding a person and
+# changing a role all belong on the screens that do them, where they can be confirmed.
+
+definition:
+  definition_id: pixel_console
+  version: 9
+  ownership: platform_shared
+
+identity:
+  product_name: Pixel
+  assistant_name: Edith
+  persona: >-
+    A calm guide to Pixel itself, who takes someone to the part of it they asked for and says
+    plainly when something is not hers to do.
+  voice_style: >-
+    You are Edith, a soft-spoken, warm and natural conversational assistant for Pixel. Speak
+    clearly and unhurriedly.
+  greeting: Welcome to {product}. I'm {assistant}.
+
+vocabulary:
+  terms: [architecture, build, demo, home, knowledge, login, member, members, onboarding,
+          organization, overview, people, product, products, project, projects, purpose, records,
+          screens, settings, sign in, signup, team, teams, workspace]
+  corrections:
+    prodcut: product
+    prodcuts: products
+    setings: settings
+    hii: hi
+    hiii: hi
+    hai: hi
+    helo: hello
+    hellow: hello
+    ther: there
+    thier: there
+    architecure: architecture
+    arcitecture: architecture
+    demmo: demo
+    prodcts: products
+    projct: project
+    organisation: organization
+    orgainzation: organization
+    teem: team
+    tema: team
+  negatable_terms: [members, products, settings, teams]
+  correction_markers: [actually, instead, rather, i mean, sorry]
+
+# The contract asks every product to declare what it keeps. Pixel keeps products, the teams that
+# run them and the people in those teams; they are named here so its screens can be described and
+# its own assistant can count them. No action reads or changes them.
+entities:
+  product:
+    label: Product
+    plural: Products
+    id: { strategy: slug, from_field: name }
+    title_field: name
+    summary_fields: [purpose, state]
+    fields:
+      name: { type: text, required: true, min: 1, max: 120, editable: false }
+      purpose: { type: text, max: 280, editable: false }
+      state: { type: text, max: 40, editable: false }
+      version: { type: integer, min: 1, editable: false }
+
+  team:
+    label: Team
+    plural: Teams
+    id: { strategy: slug, from_field: name }
+    title_field: name
+    summary_fields: [people]
+    fields:
+      name: { type: text, required: true, min: 1, max: 80, editable: false }
+      people: { type: integer, min: 0, editable: false }
+      products: { type: refs, target: product }
+
+  member:
+    label: Person
+    plural: People
+    id: { strategy: slug, from_field: name }
+    title_field: name
+    summary_fields: [role, team]
+    fields:
+      name: { type: text, required: true, min: 1, max: 254, editable: false }
+      role: { type: text, max: 40, editable: false }
+      team: { type: ref, target: team }
+      products: { type: refs, target: product }
+
+people:
+  entity: member
+  match_on: [name]
+
+scope:
+  anchor: product
+  paths:
+    product: []
+    team: [products]
+    member: [products]
+
+views:
+  overview:
+    label: Overview
+    kind: dashboard
+    shortcut: O
+  products:
+    label: Products
+    kind: list
+    entity: product
+    shortcut: P
+    columns: [name, purpose]
+    controls:
+      add_product_button: { label: Add a product }
+  members:
+    label: People and teams
+    kind: list
+    entity: member
+    shortcut: M
+    columns: [name, role, team]
+    controls:
+      add_person_button: { label: Add a person }
+      create_team_button: { label: Create a team }
+  teams:
+    label: Teams
+    kind: list
+    entity: team
+    shortcut: T
+    columns: [name, people]
+  settings:
+    label: Settings
+    kind: dashboard
+    shortcut: S
+    controls:
+      organization_name_field: { label: Organization name }
+  build:
+    label: New product
+    kind: dashboard
+    shortcut: B
+  demo:
+    label: Demo
+    kind: dashboard
+    shortcut: G
+
+# Declared in the order somebody new to Pixel needs them, because this is the order the
+# assistant offers them in: what to do first comes first, and the machinery of running a
+# product comes after.
+actions:
+  open_build: { capability: NAVIGATE_VIEW, view: build, description: Add a product. }
+  open_products: { capability: NAVIGATE_VIEW, view: products, description: Open your products. }
+  open_product: { capability: OPEN_RECORD, entity: product, description: Open one of your products. }
+  open_demo: { capability: NAVIGATE_VIEW, view: demo, description: Visit the demo. }
+  open_architecture: { capability: NAVIGATE_VIEW, view: architecture, description: Open the system architecture. }
+  open_overview: { capability: NAVIGATE_VIEW, view: overview, description: Open the overview. }
+  open_members: { capability: NAVIGATE_VIEW, view: members, description: Open the people and teams in this organization. }
+  open_teams: { capability: NAVIGATE_VIEW, view: teams, description: Open your teams. }
+  open_team: { capability: OPEN_RECORD, entity: team, description: Open one of your teams. }
+  open_settings: { capability: NAVIGATE_VIEW, view: settings, description: Open the settings. }
+  # Pointing at the control rather than describing where it is. Somebody asking where they add a
+  # person is one click from doing it, instead of reading directions to a button.
+  highlight_add_product:
+    capability: HIGHLIGHT_CONTROL
+    view: products
+    control: add_product_button
+    entity: product
+    description: Show where products are added.
+  highlight_add_person:
+    capability: HIGHLIGHT_CONTROL
+    view: members
+    control: add_person_button
+    entity: member
+    description: Show where people are added.
+  highlight_create_team:
+    capability: HIGHLIGHT_CONTROL
+    view: members
+    control: create_team_button
+    entity: team
+    description: Show where teams are created.
+  highlight_organization_name:
+    capability: HIGHLIGHT_CONTROL
+    view: settings
+    control: organization_name_field
+    description: Show where your organization is named.
+
+intents:
+  # Pointing comes before opening: "where do I add a person" is asking for the control, and
+  # answering it with the screen alone leaves the person hunting for the button they asked about.
+  - action: highlight_add_product
+    match: [[where, how do i, how can i, show me where, point me to, which button],
+            [add a product, add product, new product, create a product, make a product]]
+  - action: highlight_add_person
+    match: [[where, how do i, how can i, show me where, point me to, which button],
+            [add a person, add person, add someone, invite, add a member, add member,
+             add a teammate, add people]]
+  - action: highlight_create_team
+    match: [[where, how do i, how can i, show me where, point me to, which button],
+            [create a team, new team, make a team, add a team]]
+  - action: highlight_organization_name
+    match: [[where, how do i, how can i, show me where, point me to, which button],
+            [rename, name my organization, organization name, company name, rename organization]]
+  - action: open_build
+    response: view_opened
+    match: [[add, create, make, new, start, set up, onboard, import],
+            [product, products, my product, our product, project, projects]]
+  - action: open_demo
+    response: view_opened
+    match: [[demo, demo mode, guided demo, the demo, visit demo, try it, example, sample product]]
+  - action: open_architecture
+    match: [[architecture, system architecture, technical architecture, architecture page,
+             architecture diagram]]
+  - action: open_product
+    requires: [record]
+    response: record_opened
+    match: [[open, show, show me, go to, take me to, view, look at, switch to, work on, get me],
+            [product, products]]
+    exclude: [products, my product, our product, all, every, list, new, add, create, how, many,
+              count, number, back, out, leave, exit, another, switch product]
+  - action: open_team
+    requires: [record]
+    response: record_opened
+    match: [[open, show, show me, go to, take me to, view, look at, who is on, whos on,
+             who is in, whos in],
+            [team, teams]]
+    exclude: [teams, all, every, list, new, add, create, how, many, count, number, back, out,
+              leave, exit]
+  - action: open_products
+    response: anchor_count
+    match: [[how many, count, number of, how much, how product, how products],
+            [product, products]]
+  - action: open_teams
+    response: anchor_count
+    match: [[how many, count, number of, how much, what, which, list],
+            [team, teams]]
+  # "Who are they" wants names, so it answers with the list rather than the number. "How many"
+  # wants the number, and gets it from the intent below this one.
+  - action: open_members
+    response: anchor_count
+    match: [[who is, whos, who are, list, show me who, tell me who],
+            [member, members, people, person, organization,
+             in my organization, in this organization]]
+  - action: open_members
+    response: people_count
+    match: [[how many, count, number of, how much, how people, how member, how members],
+            [member, members, people, person, organization,
+             in my organization, in this organization]]
+  # "Who are they" after a count, with nothing in it to say who "they" are. It carries no word
+  # that any other intent claims, so it can be a single group without becoming ambiguous.
+  - action: open_members
+    response: anchor_count
+    match: [[who are they, name them, tell me their names, what are their names]]
+  - action: open_products
+    response: view_opened
+    match: [[product, products, my products, all products, out of this, out of here, leave this,
+             back to products, take me out, exit this product, another product, switch product]]
+  - action: open_overview
+    response: view_opened
+    match: [[overview, home, dashboard, start, workspace, go back, back, get started,
+             where do i start, what do i do]]
+  - action: open_members
+    response: view_opened
+    match: [[member, members, people, team, teams, team members, who is in, organization]]
+  - action: open_settings
+    response: view_opened
+    match: [[setting, settings, preferences, configuration]]
+  - action: open_build
+    response: view_opened
+    match: [[build, new product, definition, definitions]]
+
+guardrails:
+  - topic: destructive_change
+    response: destructive_refused
+    match: [[delete, erase, wipe, remove all, delete all]]
+  - topic: external_tools
+    response: out_of_scope
+    match: [[salesforce, hubspot, zendesk, jira, gmail, outlook, slack, notion, trello, asana,
+             google sheets, excel, quickbooks, stripe]]
+
+# Which replies this product uses. The words themselves are the platform's, so that what an
+# assistant says about what it did cannot be written by the product it is speaking for; these
+# names only declare which of those replies this product means to use.
+responses:
+  view_opened: "I'll take you to {view}."
+  out_of_scope: "I can only help with {product} here, so I can't do that."
+  destructive_refused: "I can't delete or erase anything here."

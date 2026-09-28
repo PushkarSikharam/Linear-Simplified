@@ -15,6 +15,7 @@ from app.db import get_connection
 from app.definitions.access import AccessDenied, authorize_product
 from app.definitions.organizations import OrganizationDirectory
 from app.engine.knowledge import KnowledgeContext, KnowledgePassage
+from collections.abc import Mapping
 
 router = APIRouter(prefix="/api/products", tags=["knowledge"])
 
@@ -45,6 +46,41 @@ def documents(product_id: str, user: AuthUser = Depends(require_member)) -> dict
     return {"version": access.binding.knowledge_version, "documents": [dict(row) for row in rows]}
 
 
+class KnowledgeFull(Exception):
+    """This product has as much approved text as it may hold."""
+
+
+def store_document(connection, tenant_id: str, product_id: str, definition_checksum: str,
+                   knowledge_version: int, title: str, body: str) -> tuple[int, str]:
+    """Add one approved document to a product, as a new knowledge version.
+
+    A version is written whole rather than appended to, so the set of documents at any version is
+    exactly what was approved together, and a session pinned to a version keeps reading what it
+    started with. Shared so that text somebody approves on the knowledge screen and text they
+    wrote when they added the product are stored on identical terms - there is no second kind of
+    approved text with rules of its own.
+    """
+    rows = connection.execute(
+        "select document_id, title, body from approved_documents "
+        "where tenant_id=? and product_id=? and knowledge_version=? and definition_checksum=?",
+        (tenant_id, product_id, knowledge_version, definition_checksum)).fetchall()
+    if len(rows) >= 16 or sum(len(row["body"]) for row in rows) + len(body) > 128000 or knowledge_version >= 21:
+        raise KnowledgeFull
+    document_id = uuid4().hex
+    content = [dict(row) for row in rows] + [
+        {"document_id": document_id, "title": title.strip(), "body": body.strip()}]
+    checksum = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
+    for item in content:
+        connection.execute("insert into approved_documents values (?, ?, ?, ?, ?, ?, ?)",
+                           (tenant_id, product_id, definition_checksum, knowledge_version + 1,
+                            item["document_id"], item["title"], item["body"]))
+    connection.execute(
+        "update product_bindings set knowledge_version=?, knowledge_checksum=? "
+        "where tenant_id=? and product_id=?",
+        (knowledge_version + 1, checksum, tenant_id, product_id))
+    return knowledge_version + 1, document_id
+
+
 @router.post("/{product_id}/knowledge", status_code=201)
 def approve_document(product_id: str, body: ApprovedText, user: AuthUser = Depends(require_member)) -> dict:
     if not body.approved or not body.title.strip() or not body.text.strip():
@@ -60,22 +96,13 @@ def approve_document(product_id: str, body: ApprovedText, user: AuthUser = Depen
         if membership is None or not (membership.role == "org_admin" or
                                       (membership.role == "team_admin" and membership.team_id == access.binding.team_id)):
             raise HTTPException(403, "Only this product's administrators can publish source text.")
-        version = access.binding.knowledge_version
-        rows = connection.execute("select document_id, title, body from approved_documents "
-                                  "where tenant_id=? and product_id=? and knowledge_version=? and definition_checksum=?",
-                                  (user.tenant_id, product_id, version, access.binding.definition_checksum)).fetchall()
-        if len(rows) >= 16 or sum(len(row["body"]) for row in rows) + len(body.text) > 128000 or version >= 21:
-            raise HTTPException(409, "This product's source capacity is reached.")
-        document_id = uuid4().hex
-        content = [dict(row) for row in rows] + [{"document_id": document_id, "title": body.title.strip(), "body": body.text.strip()}]
-        checksum = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
-        for item in content:
-            connection.execute("insert into approved_documents values (?, ?, ?, ?, ?, ?, ?)",
-                               (user.tenant_id, product_id, access.binding.definition_checksum, version + 1,
-                                item["document_id"], item["title"], item["body"]))
-        connection.execute("update product_bindings set knowledge_version=?, knowledge_checksum=? where tenant_id=? and product_id=?",
-                           (version + 1, checksum, user.tenant_id, product_id))
-    return {"version": version + 1, "document_id": document_id}
+        try:
+            version, document_id = store_document(
+                connection, user.tenant_id, product_id, access.binding.definition_checksum,
+                access.binding.knowledge_version, body.title, body.text)
+        except KnowledgeFull:
+            raise HTTPException(409, "This product's source capacity is reached.") from None
+    return {"version": version, "document_id": document_id}
 
 
 # Words that say how a question is asked rather than what it is about. They match every
@@ -142,15 +169,28 @@ class ApprovedKnowledge:
     def __init__(self, context: KnowledgeContext):
         self.context = context
 
-    def search(self, text: str, limit: int = 3) -> list[KnowledgePassage]:
+    def documents(self) -> list[Mapping[str, str]]:
+        """The approved text this product may be answered from, at its pinned version.
+
+        A seam, not a convenience: a product whose text is partly derived from what the platform
+        already knows - Pixel's own console, which can say what each of your products is for -
+        adds it here and is then ranked by exactly the same rule as text somebody typed. The
+        alternative, a second search with a second ranking, is how two answers to one question
+        start disagreeing.
+        """
         context = self.context
-        terms = _subject_terms(text)
-        if not terms:
-            return []
         with get_connection() as connection:
             rows = connection.execute("select document_id, title, body from approved_documents "
                                       "where tenant_id=? and product_id=? and knowledge_version=? and definition_checksum=?",
                                       (context.tenant_id, context.product_id, context.knowledge_version, context.definition_checksum)).fetchall()
+        return [{"document_id": row["document_id"], "title": row["title"], "body": row["body"]}
+                for row in rows]
+
+    def search(self, text: str, limit: int = 3) -> list[KnowledgePassage]:
+        terms = _subject_terms(text)
+        if not terms:
+            return []
+        rows = self.documents()
         chunks = [(row, start, row["body"][start:start + 1000])
                   for row in rows for start in range(0, len(row["body"]), 900)]
         # How many passages use each word, so that a word common to all of them cannot decide

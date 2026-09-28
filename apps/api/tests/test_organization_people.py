@@ -14,9 +14,11 @@ class OrganizationPeopleTest(AddedProductFixture):
     def as_user(self, user_id: str) -> dict:
         return {"Authorization": f"Bearer {create_token(user_id, TENANT)}"}
 
-    def add(self, email: str, role: str = "team_member", headers: dict | None = None):
+    def add(self, email: str, role: str = "team_member", headers: dict | None = None,
+            first_name: str = "Ada", last_name: str = "Byron"):
         return self.client.post(f"/api/organizations/{TENANT}/people", headers=headers or self.headers,
-                                json={"email": email, "role": role})
+                                json={"email": email, "role": role,
+                                      "first_name": first_name, "last_name": last_name})
 
     def emails(self) -> set[str]:
         listed = self.client.get(f"/api/organizations/{TENANT}/members", headers=self.headers).json()
@@ -51,7 +53,7 @@ class OrganizationPeopleTest(AddedProductFixture):
         refused = self.add("lee@example.test", headers=self.as_user(member["user_id"]))
         self.assertEqual(refused.status_code, 403)
         elsewhere = self.client.post("/api/organizations/acme/people", headers=self.headers,
-                                     json={"email": "x@example.test"})
+                                     json={"email": "x@example.test", "first_name": "Ada", "last_name": "Byron"})
         self.assertEqual(elsewhere.status_code, 404)
 
     def test_removing_someone_ends_their_access_at_once(self):
@@ -121,7 +123,7 @@ class OrganizationTeamsTest(AddedProductFixture):
 
     def test_the_team_list_says_who_works_there_and_what_it_runs(self):
         self.client.post(f"/api/organizations/{TENANT}/people", headers=self.headers,
-                         json={"email": "a@example.test"})
+                         json={"email": "a@example.test", "first_name": "Ada", "last_name": "Byron"})
         home = [team for team in self.teams().values() if PRODUCT in team["products"]]
         self.assertEqual(len(home), 1)
         self.assertGreaterEqual(home[0]["people"], 1)
@@ -129,16 +131,16 @@ class OrganizationTeamsTest(AddedProductFixture):
     def test_somebody_can_be_added_straight_into_a_team(self):
         team = self.new_team("Design").json()["team_id"]
         added = self.client.post(f"/api/organizations/{TENANT}/people", headers=self.headers,
-                                 json={"email": "d@example.test", "team_id": team})
+                                 json={"email": "d@example.test", "team_id": team, "first_name": "Ada", "last_name": "Byron"})
         self.assertEqual(added.status_code, 201, added.text)
         self.assertEqual(self.directory.membership(TENANT, added.json()["user_id"]).team_id, team)
         missing = self.client.post(f"/api/organizations/{TENANT}/people", headers=self.headers,
-                                   json={"email": "e@example.test", "team_id": "no-such-team"})
+                                   json={"email": "e@example.test", "team_id": "no-such-team", "first_name": "Ada", "last_name": "Byron"})
         self.assertEqual(missing.status_code, 404)
 
     def test_moving_a_person_changes_which_products_they_can_open(self):
         added = self.client.post(f"/api/organizations/{TENANT}/people", headers=self.headers,
-                                 json={"email": "m@example.test"}).json()
+                                 json={"email": "m@example.test", "first_name": "Ada", "last_name": "Byron"}).json()
         self.assertEqual(self.records(added["user_id"]), 200)
         design = self.new_team("Design").json()["team_id"]
         moved = self.client.patch(f"/api/organizations/{TENANT}/people/{added['user_id']}",
@@ -154,7 +156,7 @@ class OrganizationTeamsTest(AddedProductFixture):
 
     def test_making_someone_an_admin_and_back_resets_their_reach(self):
         added = self.client.post(f"/api/organizations/{TENANT}/people", headers=self.headers,
-                                 json={"email": "r@example.test"}).json()
+                                 json={"email": "r@example.test", "first_name": "Ada", "last_name": "Byron"}).json()
         up = self.client.patch(f"/api/organizations/{TENANT}/people/{added['user_id']}",
                                headers=self.headers, json={"role": "org_admin"})
         self.assertEqual(up.status_code, 200, up.text)
@@ -169,7 +171,7 @@ class OrganizationTeamsTest(AddedProductFixture):
 
     def test_only_an_administrator_changes_teams_and_never_their_own_role(self):
         member = self.client.post(f"/api/organizations/{TENANT}/people", headers=self.headers,
-                                  json={"email": "n@example.test"}).json()
+                                  json={"email": "n@example.test", "first_name": "Ada", "last_name": "Byron"}).json()
         theirs = self.as_user(member["user_id"])
         self.assertEqual(self.new_team("Ops", headers=theirs).status_code, 403)
         self.assertEqual(self.client.put(f"/api/organizations/{TENANT}/products/{PRODUCT}/team", headers=theirs,

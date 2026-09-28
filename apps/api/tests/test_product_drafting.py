@@ -194,6 +194,7 @@ class TalkingToADraftedProductTest(EngineCutoverFixture):
             "Authorization": f"Bearer {create_token('demo-admin', TENANT)}",
         }, json={"product_id": "drafted-crm", "team_id": "planning-team",
                  "definition_id": "drafted_crm", "definition_version": 1,
+                 "purpose": "Keeps our deals and who owns each one.",
                  "definition": source})
         self.assertEqual(published.status_code, 201, published.text)
 

@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import {
   Boxes, Building2, ChevronsUpDown, Gauge, Hammer, LogOut,
-  Monitor, Moon, Network, PanelLeftClose, PanelLeftOpen, PlayCircle, Sun, UserCog, Users,
+  Monitor, Moon, Network, PanelLeftClose, PanelLeftOpen, Sun, UserCog, Users,
 } from "lucide-react";
 import { useConsole } from "./console-context";
 import { Edith } from "./edith-shell";
@@ -32,7 +32,8 @@ const NAV = [
     { href: "/console/settings", label: "Settings", icon: Building2 },
   ] },
   { section: "Pixel", items: [
-    { href: "/demo", label: "Explore the demo", icon: PlayCircle, external: true },
+    // The demo is not listed here: it has its own accented link above this navigation, and two
+    // links to one page under two different names read as two different places.
     { href: "/architecture", label: "How Pixel works", icon: Network, external: true },
   ] },
 ];
@@ -83,7 +84,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
         <nav id="pixel-primary-navigation" aria-label="Primary">
           <div className="px-nav">
-            <a href="/demo"><Monitor aria-hidden />Visit demo</a>
+            <a className="px-nav-cta" href="/demo"><Monitor aria-hidden />Visit demo</a>
           </div>
           {NAV.map((group) => (
             <div key={group.section} className="px-nav">
@@ -155,22 +156,24 @@ export function Shell({ children }: { children: ReactNode }) {
               page is a row of the same grid as the assistant, so the first row is as tall as the
               assistant and everything after the heading starts below the fold. */}
           <div className="px-main-column">
-            {c.loading ? <LoadingRows rows={4} /> : !c.account && c.liveUnavailable ? <div className="px-stack">
+            {/* Being signed out and failing to ask are different things, and only the first of
+                them is answered with a Sign in button. A failure to ask keeps the person where
+                they are and offers to try again, because their session has not gone anywhere -
+                which is what coming back from the demo used to get wrong. */}
+            {c.loading ? <LoadingRows rows={4} /> : !c.account && c.signedOut ? <div className="px-stack">
               <h1>Your Pixel workspace</h1>
-              <Alert tone="warn" title="Pixel is temporarily unavailable">
-                Pixel&apos;s server is not responding, so your workspace and assistant cannot load
-                right now. You are not signed out, and nothing has been lost.
-              </Alert>
-              <div className="px-row"><Button variant="primary" onClick={c.reloadProducts}>Try again</Button></div>
-            </div> : !c.account ? <div className="px-stack">
-              <h1>Your Pixel workspace</h1>
-              {c.liveError
-                ? <Alert tone="warn">{c.liveError}</Alert>
-                : <p className="px-muted" style={{ margin: 0 }}>Sign in to see your products and ask Edith about them, or explore the demo first.</p>}
+              <p className="px-muted" style={{ margin: 0 }}>Sign in to see your products and ask Edith about them, or visit the demo first.</p>
               <div className="px-row">
                 <Link className="px-button" data-variant="primary" href="/sign-in">Sign in</Link>
-                <a className="px-button" href="/demo">Explore the demo</a>
+                <a className="px-button" href="/demo">Visit demo</a>
               </div>
+            </div> : !c.account ? <div className="px-stack">
+              <h1>Your Pixel workspace</h1>
+              <Alert tone="warn" title="Pixel is temporarily unavailable">
+                {c.liveError ?? "Pixel's server is not responding, so your workspace and assistant cannot load right now."}
+                {" "}You are still signed in, and nothing has been lost.
+              </Alert>
+              <div className="px-row"><Button variant="primary" onClick={c.reloadProducts}>Try again</Button></div>
             </div> : children}
           </div>
         </main>

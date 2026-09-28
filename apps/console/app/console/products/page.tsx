@@ -18,7 +18,8 @@ function Catalogue() {
 
   const head = (
     <PageHead title="Products" description="Every product your teams own in this organization."
-      actions={canCreate ? <Link className="px-button" data-variant="primary" href="/console/products/new"><Plus aria-hidden />Add a product</Link> : null} />
+      actions={canCreate ? <Link className="px-button" data-variant="primary" data-px-control="add_product_button"
+        href="/console/products/new"><Plus aria-hidden />Add a product</Link> : null} />
   );
 
   return (
@@ -41,11 +42,12 @@ function Catalogue() {
         <div className="px-table-wrap">
           <table className="px-table">
             <caption className="px-sr-only">Products</caption>
-            <thead><tr><th scope="col">Product</th><th scope="col">Team</th><th scope="col">Status</th><th scope="col" className="px-num">Version</th></tr></thead>
+            <thead><tr><th scope="col">Product</th><th scope="col">What it is for</th><th scope="col">Team</th><th scope="col">Status</th><th scope="col" className="px-num">Version</th></tr></thead>
             <tbody>
               {products.map((p) => (
                 <tr key={p.id}>
-                  <td><Link href={`/console/products/${encodeURIComponent(p.id)}`}>{p.name}</Link><div className="px-small px-muted">{p.description}</div></td>
+                  <td><Link href={`/console/products/${encodeURIComponent(p.id)}`}>{p.name}</Link></td>
+                  <td className="px-muted">{p.description}</td>
                   <td>{c.account?.teams.find((t) => t.team_id === p.teamId)?.name ?? p.teamId}</td>
                   <td><StatusBadge status={p.state} /></td>
                   <td className="px-num">{p.revision}</td>

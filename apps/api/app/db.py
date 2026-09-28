@@ -513,6 +513,21 @@ def migrate() -> None:
             "signals": {
                 "scope_id": "text",
             },
+            # A person's own name. Kept beside their address because that is what identifies
+            # them, and left null for accounts that existed before anybody was asked for one:
+            # a screen and an assistant both fall back to the address, which is never wrong,
+            # only less human.
+            "email_accounts": {
+                "first_name": "text",
+                "last_name": "text",
+            },
+            # What the organization said this product is for, in their own sentence, kept beside
+            # the binding rather than inside the definition: the definition describes what the
+            # product holds and can do, and this says why they added it. Null for products bound
+            # before anyone was asked.
+            "product_bindings": {
+                "purpose": "text",
+            },
             # 5c: the visitor's introduced name, so a later greeting can use it.
             # previous_view: the screen before the current one, so going back means where
             # somebody was. A conversation that predates it simply has nowhere to go back to.

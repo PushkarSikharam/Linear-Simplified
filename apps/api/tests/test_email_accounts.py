@@ -326,6 +326,7 @@ class EmailAccountsTest(EngineCutoverFixture):
         response = self.client.post(f'/api/organizations/{account["tenant_id"]}/products', headers=headers, json={
             "product_id": "library", "team_id": "default", "definition_id": "sample_library",
             "definition": yaml.safe_dump(definition),
+            "purpose": "Keeps the work this team does.",
         })
         self.assertEqual(response.status_code, 201, response.text)
         source = self.client.post("/api/products/library/knowledge", headers=headers, json={
@@ -350,6 +351,7 @@ class EmailAccountsTest(EngineCutoverFixture):
             response = self.client.post(f'/api/organizations/{account["tenant_id"]}/products', headers=headers, json={
                 "product_id": "library", "team_id": "default", "definition_id": "sample_library",
                 "definition": yaml.safe_dump(definition),
+                "purpose": "Keeps the work this team does.",
             })
             self.assertEqual(response.status_code, 403, response.text)
         with db.get_connection() as connection:
@@ -437,8 +439,9 @@ class OpenSignInTest(EngineCutoverFixture):
         self.mail = mail.start()
         self.addCleanup(mail.stop)
 
-    def sign_in(self, email="manager@example.test"):
-        return self.client.post("/api/account/sign-in", json={"email": email})
+    def sign_in(self, email="manager@example.test", first_name="Priya", last_name="Raman"):
+        return self.client.post("/api/account/sign-in", json={
+            "email": email, "first_name": first_name, "last_name": last_name})
 
     def test_it_is_off_unless_somebody_turns_it_on(self):
         """Nothing about a fresh deployment lets an unproven address in."""
@@ -485,6 +488,23 @@ class OpenSignInTest(EngineCutoverFixture):
     def test_a_nonsense_address_is_refused(self):
         for typed in ("", "  ", "not-an-address", "who@example", "a b@example.test"):
             self.assertIn(self.sign_in(typed).status_code, (422,), typed)
+
+    def test_a_workspace_is_opened_in_somebodys_name(self):
+        """An open deployment sends nothing, so this is the only moment it can ask who they are."""
+        session = self.sign_in("priya@example.test").json()
+        answered = self.client.get("/api/account/session", headers={
+            "Authorization": "Bearer " + create_token(session["user_id"], session["tenant_id"])})
+        self.assertEqual(answered.json()["name"], "Priya Raman")
+        self.assertEqual(self.client.post("/api/account/sign-in", json={
+            "email": "nameless@example.test"}).status_code, 422)
+
+    def test_a_returning_name_never_silently_replaces_the_one_on_record(self):
+        """A typo on one sign-in must not change what colleagues have been calling somebody."""
+        first = self.sign_in("steady@example.test", "Priya", "Raman").json()
+        self.sign_in("steady@example.test", "Pria", "Ramn")
+        answered = self.client.get("/api/account/session", headers={
+            "Authorization": "Bearer " + create_token(first["user_id"], first["tenant_id"])})
+        self.assertEqual(answered.json()["name"], "Priya Raman")
 
     def test_it_still_requires_definition_authority(self):
         """Open sign-in relaxes who may come in, never which engine owns their workspace."""

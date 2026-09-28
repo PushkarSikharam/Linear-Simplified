@@ -6,7 +6,11 @@ import {
   understood, validate,
 } from "./onboarding";
 
-const started = () => setDetails(initialOnboarding("billing"), "Ledger", "ledger");
+// A product now says what it is for before anything else happens, so every start carries one.
+const started = () => ({
+  ...setDetails(initialOnboarding("billing"), "Ledger", "ledger"),
+  purpose: "Keeps our invoices and who owes what.",
+});
 /** A product described the way somebody adding one describes it. */
 const described = () => {
   let state = goTo(started(), "sources");
@@ -18,6 +22,23 @@ const described = () => {
 const analyzed = () => completeAnalysis(described());
 
 describe("onboarding flow", () => {
+  it("will not go on until the product says what it is for", () => {
+    // A definition says what a product holds and what may be done in it, and never why anybody
+    // wanted it. Nobody but the person adding it can supply that, and the assistant is asked it
+    // constantly, so it is collected here rather than left to be filled in afterwards.
+    const named = setDetails(initialOnboarding("billing"), "Ledger", "ledger");
+    expect(canEnter(named, "sources")).toBe(false);
+    expect(canEnter({ ...named, purpose: "Keeps our invoices." }, "sources")).toBe(true);
+  });
+
+  it("takes a chosen template's own words as the purpose, and never overwrites your own", () => {
+    const blank = applyTemplate(initialOnboarding("billing"), PRODUCT_TEMPLATES[0].id);
+    expect(blank.purpose).toBe(PRODUCT_TEMPLATES[0].summary);
+    const mine = applyTemplate({ ...initialOnboarding("billing"), purpose: "Mine." },
+                               PRODUCT_TEMPLATES[0].id);
+    expect(mine.purpose).toBe("Mine.");
+  });
+
   it("cannot skip ahead", () => {
     const state = initialOnboarding("billing");
     expect(canEnter(state, "sources")).toBe(false);

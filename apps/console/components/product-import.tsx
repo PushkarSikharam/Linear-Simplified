@@ -14,6 +14,7 @@ export function ProductImport() {
   const [definitionId, setDefinitionId] = useState("");
   const [version, setVersion] = useState(1);
   const [source, setSource] = useState("");
+  const [purpose, setPurpose] = useState("");
   const [team, setTeam] = useState(c.account?.teams[0]?.team_id ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,7 +27,9 @@ export function ProductImport() {
     try {
       const session = storedSession();
       if (!session) throw new Error("Sign in to continue.");
-      const product = await addProduct(session, { productId, definitionId, teamId: team, definition: source, version });
+      const product = await addProduct(session, {
+        productId, definitionId, teamId: team, definition: source, version, purpose: purpose.trim(),
+      });
       c.reloadProducts(); c.selectProduct(product.product_id);
       router.push(`/console/products/${encodeURIComponent(product.product_id)}`);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Product could not be added."); }
@@ -41,6 +44,10 @@ export function ProductImport() {
       <Field label="Team">{(f) => <select id={f.id} className="px-select" required value={team} onChange={(e) => setTeam(e.target.value)}>
         {c.account?.teams.map((t) => <option key={t.team_id} value={t.team_id}>{t.name}</option>)}
       </select>}</Field>
+      <Field label="What is it for?" hint="One sentence, in your own words. Edith answers from it.">{(f) => (
+        <Input id={f.id} describedBy={f.describedBy} required maxLength={280} value={purpose}
+          onChange={(e) => setPurpose(e.target.value)} />
+      )}</Field>
       <Field label="Contract ID">{(f) => <Input id={f.id} required maxLength={64} value={definitionId} onChange={(e) => setDefinitionId(e.target.value)} />}</Field>
       <Field label="Contract version">{(f) => <Input id={f.id} required type="number" min={1} value={version} onChange={(e) => setVersion(Number(e.target.value))} />}</Field>
       <Field label="Approved product contract (.json, .yaml)">{(f) => <Input id={f.id} type="file" accept=".json,.yaml,.yml" onChange={async (event) => {
@@ -52,7 +59,7 @@ export function ProductImport() {
       }} />}</Field>
       <Field label="Product contract">{(f) => <textarea id={f.id} className="px-input" rows={14} required value={source} onChange={(e) => setSource(e.target.value)} />}</Field>
       <p className="px-small px-muted">Organization: <code>{c.account?.tenant_id}</code></p>
-      <Button type="submit" variant="primary" loading={busy} disabled={!source || !team}><Upload aria-hidden />Validate and add product</Button>
+      <Button type="submit" variant="primary" loading={busy} disabled={!source || !team || purpose.trim().length < 3}><Upload aria-hidden />Validate and add product</Button>
     </form>}
   </>;
 }

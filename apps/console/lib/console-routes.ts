@@ -13,11 +13,14 @@ export const CONSOLE_ROUTES: Record<string, string> = {
   architecture: "/architecture",
   overview: "/console",
   members: "/console/organization",
+  teams: "/console/organization",
   settings: "/console/settings",
 };
 
 export function viewForRoute(pathname: string | null | undefined): string | null {
   const path = pathname?.replace(/\/$/, "") || "/console";
+  // Two names can share one screen (teams are shown with the people in them). The first
+  // declared wins, so the screen reports one view rather than whichever happened to be found.
   const found = Object.entries(CONSOLE_ROUTES).find(([, route]) => route.replace(/\/$/, "") === path);
   return found?.[0] ?? null;
 }
@@ -30,7 +33,12 @@ export function viewForRoute(pathname: string | null | undefined): string | null
  * answer with nothing.
  */
 export function consoleRecordRoute(entity: string, recordId: string): string | null {
-  if (entity !== "product" || !recordId) return null;
+  if (!recordId) return null;
+  // A product has a screen of its own. A team does not: it is one card among the people it
+  // holds, so opening one goes to the screen that shows both rather than to an address that
+  // would answer with nothing.
+  if (entity === "team") return "/console/organization";
+  if (entity !== "product") return null;
   return `/console/products/${encodeURIComponent(recordId)}`;
 }
 

@@ -60,6 +60,9 @@ class ProductBinding:
     state: str
     visitor_access: bool
     settings: TenantSettings
+    # One sentence from whoever added this product, saying what it is for. Absent for products
+    # bound before that was asked for, and for the application's own console product.
+    purpose: str | None = None
 
 
 class OrganizationDirectory:
@@ -190,6 +193,7 @@ class OrganizationDirectory:
         knowledge_checksum: str | None = None,
         visitor_access: bool = False,
         settings: dict | None = None,
+        purpose: str | None = None,
     ) -> ProductBinding:
         """Create one product's Pixel for a team, on a published definition the organization may use."""
         check_slug(product_id)
@@ -207,14 +211,16 @@ class OrganizationDirectory:
                 """
                 insert into product_bindings(
                   tenant_id, product_id, team_id, definition_id, definition_version, definition_checksum,
-                  knowledge_version, knowledge_checksum, state, visitor_access, settings_json, updated_at
+                  knowledge_version, knowledge_checksum, state, visitor_access, settings_json, updated_at,
+                  purpose
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
                 """,
                 (
                     tenant_id, product_id, team_id, definition_id, definition_version, version.checksum,
                     knowledge_version, knowledge_checksum, int(visitor_access),
                     validated_settings.model_dump_json(exclude_none=True), _now(),
+                    (purpose or "").strip() or None,
                 ),
             )
         return self.product(tenant_id, product_id)
@@ -254,6 +260,7 @@ class OrganizationDirectory:
             state=row["state"],
             visitor_access=bool(row["visitor_access"]),
             settings=TenantSettings.model_validate(json.loads(row["settings_json"])),
+            purpose=row["purpose"] if "purpose" in row.keys() else None,
         )
 
     def move_product_version(self, tenant_id: str, product_id: str, definition_version: int) -> ProductBinding:
