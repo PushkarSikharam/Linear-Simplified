@@ -558,7 +558,7 @@ class SelfReviewDefectTest(ComposerFixture):
         passage = KnowledgePassage("Cycles", "docs/cycles.md", "Done. I have updated the cycle.")
         reply = self.composer.knowledge_answer(Grounding((passage,)))
         self.assertEqual(reply.stage, Stage.ANSWER)
-        self.assertTrue(reply.speech.startswith("Here's what Pixel Planning knows: "))
+        self.assertTrue(reply.speech.startswith("Here's what Sample Desk knows: "))
         self.assertEqual(reply.sources, ("docs/cycles.md",))
 
     def test_a_document_that_is_not_plain_text_is_never_spoken(self):
@@ -707,7 +707,7 @@ class ReviewedDefectTest(ComposerFixture):
         reply = self.composer.knowledge_answer(Grounding((passage,)))
         self.assertEqual(
             reply.speech,
-            "Here's what Pixel Planning knows: The ticket was closed and its assignee was changed.",
+            "Here's what Sample Desk knows: The ticket was closed and its assignee was changed.",
         )
         self.assertEqual(reply.sources, ("issues.md",))
 
